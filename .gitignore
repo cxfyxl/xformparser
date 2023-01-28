@@ -1,0 +1,7 @@
+# this is .gitignore file.
+# 以下是忽略的文件
+log
+mylog
+mytmp
+runs
+tmp

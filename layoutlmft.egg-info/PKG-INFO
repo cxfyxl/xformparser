@@ -1,0 +1,7 @@
+Metadata-Version: 2.1
+Name: layoutlmft
+Version: 0.1
+Home-page: https://github.com/microsoft/unilm/tree/master/layoutlmft
+Author: LayoutLM Team
+Requires-Python: >=3.7
+Provides-Extra: dev

@@ -6,7 +6,7 @@ import torch.nn.functional as F
 import torch.utils.checkpoint
 from torch import nn
 from torch.nn import CrossEntropyLoss, BCEWithLogitsLoss
-
+import copy
 import detectron2
 from detectron2.modeling import META_ARCH_REGISTRY
 from transformers import PreTrainedModel
@@ -828,6 +828,7 @@ class LayoutLMv2ForTokenClassification(LayoutLMv2PreTrainedModel):
         self.layoutlmv2 = LayoutLMv2Model(config)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
         self.classifier = nn.Linear(config.hidden_size, config.num_labels)
+        self.softmax = torch.nn.Softmax(dim=-1)
 
         self.init_weights()
 
@@ -868,7 +869,7 @@ class LayoutLMv2ForTokenClassification(LayoutLMv2PreTrainedModel):
         sequence_output, image_output = outputs[0][:, :seq_length], outputs[0][:, seq_length:]
         sequence_output = self.dropout(sequence_output)
         logits = self.classifier(sequence_output)
-
+        logits = self.softmax(logits)
         loss = None
         if labels is not None:
             loss_fct = CrossEntropyLoss()
@@ -1037,14 +1038,16 @@ class LayoutLMv2ForRelationExtraction(LayoutLMv2PreTrainedModel):
 
 
 
-class LayoutLMv2ForTokenClassification(LayoutLMv2PreTrainedModel):
+class LayoutLMv2ForJointCellClassification(LayoutLMv2PreTrainedModel):
     def __init__(self, config):
         super().__init__(config)
         self.num_labels = config.num_labels
         self.layoutlmv2 = LayoutLMv2Model(config)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
         self.classifier = nn.Linear(config.hidden_size, config.num_labels)
-
+        self.extractor = CellDecoder(config)
+        self.softmax = torch.nn.Softmax(dim=-1)
+        self.loss_fct = CrossEntropyLoss()
         self.init_weights()
 
     def get_input_embeddings(self):
@@ -1060,6 +1063,8 @@ class LayoutLMv2ForTokenClassification(LayoutLMv2PreTrainedModel):
         position_ids=None,
         head_mask=None,
         inputs_embeds=None,
+        entities=None,
+        relations=None,
         labels=None,
         output_attentions=None,
         output_hidden_states=None,
@@ -1083,71 +1088,45 @@ class LayoutLMv2ForTokenClassification(LayoutLMv2PreTrainedModel):
         seq_length = input_ids.size(1)
         sequence_output, image_output = outputs[0][:, :seq_length], outputs[0][:, seq_length:]
         sequence_output = self.dropout(sequence_output)
-        logits = self.classifier(sequence_output)
+        device = sequence_output.device
+        ner_loss = 0
+        all_logits = []
+        batch_size, max_n_words, context_dim = sequence_output.size()
+        pred_entities = copy.deepcopy(entities)
+        for b in range(batch_size):
+            if len(entities[b]["start"]) == 0:
+                continue
+            entities_start_index = torch.tensor(entities[b]["start"],device=device).type(torch.long)
+            entities_end_index = torch.tensor(entities[b]["end"], device=device).type(torch.long)
+            entity_repr = None
+            for i in enumerate(entities_start_index):
+                index = i[0]
+                start_index, end_index = entities_start_index[index], entities_end_index[index]
+                temp_repr = sequence_output[b][start_index:end_index].mean(dim=0).view(1,context_dim)
+                # temp_repr = sequence_output[b][start_index:end_index].max(dim=0)[0].view(1,context_dim)
+                entity_repr = temp_repr if entity_repr == None else torch.cat([entity_repr,temp_repr],dim=0)
+                
+            entities_labels = torch.tensor(entities[b]["label"],device=device).type(torch.long)
+            
+            # entity_repr = torch.tensor(sequence_output[b][entities_start_index],device=device)
+            # entity = self.ffnn_entity(entity_repr)
+            logits = self.classifier(entity_repr)
+            # logits = self.softmax(logits)
+            pred_entities[b]["label"] = logits.argmax(dim=-1).tolist()
+            # pred_entities[b]["label_logits"] = self.softmax(logits)
+            ner_loss += self.loss_fct(logits, entities_labels)
+            all_logits.append(logits)
 
-        loss = None
-        if labels is not None:
-            loss_fct = CrossEntropyLoss()
-
-            if attention_mask is not None:
-                active_loss = attention_mask.view(-1) == 1
-                active_logits = logits.view(-1, self.num_labels)[active_loss]
-                active_labels = labels.view(-1)[active_loss]
-                loss = loss_fct(active_logits, active_labels)
-            else:
-                loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
-
-        if not return_dict:
-            output = (logits,) + outputs[2:]
-            return ((loss,) + output) if loss is not None else output
-
-        return TokenClassifierOutput(
-            loss=loss,
-            logits=logits,
-            hidden_states=outputs.hidden_states,
-            attentions=outputs.attentions,
-        )
-
-
-class LayoutLMv2ForJointRelationExtraction(LayoutLMv2PreTrainedModel):
-    def __init__(self, config):
-        super().__init__(config)
-        self.layoutlmv2 = LayoutLMv2Model(config)
-        self.dropout = nn.Dropout(config.hidden_dropout_prob)
-        self.extractor = REDecoder(config)
-        self.init_weights()
-
-    def forward(
-        self,
-        input_ids,
-        bbox,
-        labels=None,
-        image=None,
-        attention_mask=None,
-        token_type_ids=None,
-        position_ids=None,
-        head_mask=None,
-        entities=None,
-        relations=None,
-    ):
-        outputs = self.layoutlmv2(
-            input_ids=input_ids,
-            bbox=bbox,
-            image=image,
-            attention_mask=attention_mask,
-            token_type_ids=token_type_ids,
-            position_ids=position_ids,
-            head_mask=head_mask,
-        )
-
-        seq_length = input_ids.size(1)
-        sequence_output, image_output = outputs[0][:, :seq_length], outputs[0][:, seq_length:]
-        sequence_output = self.dropout(sequence_output)
-        loss, pred_relations = self.extractor(sequence_output, entities, relations)
-
+        re_loss, pred_relations = self.extractor(sequence_output, pred_entities, entities, relations)
+        gamma = 0.33
+        loss = ner_loss + re_loss
+        # loss = gamma * ner_loss + (1 - gamma) * re_loss
         return ReOutput(
             loss=loss,
+            ner_loss=ner_loss,
+            re_loss=re_loss,
             entities=entities,
+            pred_entities=pred_entities,
             relations=relations,
             pred_relations=pred_relations,
             hidden_states=outputs[0],

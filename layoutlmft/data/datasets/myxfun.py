@@ -56,6 +56,7 @@ class XFUN(datasets.GeneratorBasedBuilder):
                             "start": datasets.Value("int64"),
                             "end": datasets.Value("int64"),
                             "label": datasets.ClassLabel(names=["HEADER", "QUESTION", "ANSWER", "SINGLE", "ANSWERNUM"]),
+                            "pred_label": datasets.ClassLabel(names=["HEADER", "QUESTION", "ANSWER", "SINGLE", "ANSWERNUM"]),
                         }
                     ),
                     "relations": datasets.Sequence(
@@ -81,6 +82,9 @@ class XFUN(datasets.GeneratorBasedBuilder):
             # /home/zhanghang-s21/data/bishe/MYXFUND/mytrain.align.json
             "train": [f"{_URL}mytrain.align.json", f"{_URL}mytrain.zip"],
             "val": [f"{_URL}myval.align.json", f"{_URL}myval.zip"],
+            # "val": [f"{_URL}myval.align.ner.json", f"{_URL}myval.zip"],
+        
+            # "val": [f"{_URL}myval.ner.json", f"{_URL}myval.zip"],
             #
             # /home/zhanghang-s21/data/bishe/MYXFUND/mytrain.align.json
             # "test": [f"{_URL}{self.config.lang}_test.json", f"{_URL}{self.config.lang}.test.zip"],
@@ -171,13 +175,24 @@ class XFUN(datasets.GeneratorBasedBuilder):
                     tokenized_inputs.update({"bbox": bbox, "labels": label})
                     if label[0] != "O": # entity_id_to_index_map:每个实体对应一个唯一id，为每个id按照顺序重新索引
                         entity_id_to_index_map[line["id"]] = len(entities)
-                        entities.append(
-                            {
-                                "start": len(tokenized_doc["input_ids"]),
-                                "end": len(tokenized_doc["input_ids"]) + len(tokenized_inputs["input_ids"]),
-                                "label": line["label"].upper(),
-                            }
-                        )
+                        if "pred_label" in line.keys():
+                            entities.append(
+                                {
+                                    "start": len(tokenized_doc["input_ids"]),
+                                    "end": len(tokenized_doc["input_ids"]) + len(tokenized_inputs["input_ids"]),
+                                    "label": line["label"].upper(),
+                                    "pred_label": line["pred_label"].upper(),
+                                }
+                            )
+                        else:
+                            entities.append(
+                                {
+                                    "start": len(tokenized_doc["input_ids"]),
+                                    "end": len(tokenized_doc["input_ids"]) + len(tokenized_inputs["input_ids"]),
+                                    "label": line["label"].upper(),
+                                    "pred_label": "question".upper(),
+                                }
+                            )
                     for i in tokenized_doc:
                         tokenized_doc[i] = tokenized_doc[i] + tokenized_inputs[i]
                 relations = list(set(relations))

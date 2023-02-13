@@ -11,7 +11,7 @@ from transformers.trainer_utils import EvalPrediction, PredictionOutput, speed_m
 from transformers.utils import logging
 
 from .funsd_trainer import FunsdTrainer
-
+from sklearn.metrics import f1_score, accuracy_score
 
 
 import collections
@@ -24,7 +24,7 @@ from logging import StreamHandler
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
 
-
+import evaluate
 # Integrations must be imported before ML frameworks:
 from transformers.integrations import (  # isort: split
     default_hp_search_backend,
@@ -106,11 +106,6 @@ from transformers.trainer_utils import (
 
 
 
-
-
-
-
-
 if version.parse(torch.__version__) >= version.parse("1.6"):
     _is_native_amp_available = True
     from torch.cuda.amp import autocast
@@ -188,6 +183,7 @@ class XfunReTrainer(FunsdTrainer):
 
         re_labels = None
         pred_relations = None
+        pred_entities = None
         entities = None
         for step, inputs in enumerate(dataloader):
             outputs, labels = self.prediction_step(model, inputs, prediction_loss_only, ignore_keys=ignore_keys)
@@ -196,7 +192,7 @@ class XfunReTrainer(FunsdTrainer):
                 outputs.pred_relations if pred_relations is None else pred_relations + outputs.pred_relations
             )
             entities = outputs.entities if entities is None else entities + outputs.entities
-
+            pred_entities = outputs.pred_entities if pred_entities is None else pred_entities + outputs.pred_entities
             self.control = self.callback_handler.on_prediction_step(self.args, self.state, self.control)
 
         gt_relations = []
@@ -217,10 +213,19 @@ class XfunReTrainer(FunsdTrainer):
                 rel_sent.append(rel)
 
             gt_relations.append(rel_sent)
-
+        ner_labels,ner_pred_labels = None,None
+        # for i in range(len(entities)):
+        #     if len(entities[i]['label']) == 0:
+        #         continue
+        #     ner_labels = entities[i]['label'] if ner_labels is None else ner_labels + entities[i]['label']
+        #     ner_pred_labels = pred_entities[i]['label'] if ner_pred_labels is None else ner_pred_labels + pred_entities[i]['label']
+        #     if len(entities[i]['label']) != len(pred_entities[i]['label']):
+        #         print("wrong")      
+        # ner_metrics = accuracy_score(ner_labels,ner_pred_labels)
         re_metrics = self.compute_metrics(EvalPrediction(predictions=pred_relations, label_ids=gt_relations))
 
         re_metrics = {
+            # "ner_precision":ner_metrics,
             "precision": re_metrics["ALL"]["p"],
             "recall": re_metrics["ALL"]["r"],
             "f1": re_metrics["ALL"]["f1"],
@@ -251,7 +256,7 @@ class XfunReTrainer(FunsdTrainer):
         self.args.local_rank = -1
         test_dataloader = self.get_test_dataloader(test_dataset)
         # 不使用多卡
-        self.args.local_rank = torch.distributed.get_rank()
+        # self.args.local_rank = torch.distributed.get_rank()
 
         start_time = time.time()
 
@@ -307,7 +312,7 @@ class XfunReTrainer(FunsdTrainer):
 
         self.args.local_rank = -1
         eval_dataloader = self.get_eval_dataloader(eval_dataset)
-        self.args.local_rank = torch.distributed.get_rank()
+        # self.args.local_rank = torch.distributed.get_rank()
 
         start_time = time.time()
 
@@ -330,8 +335,35 @@ class XfunReTrainer(FunsdTrainer):
 
 
 
+    def compute_loss(self, model, inputs, return_outputs=False):
+        """
+        How the loss is computed by Trainer. By default, all models return the loss in the first element.
 
+        Subclass and override for custom behavior.
+        """
+        if self.label_smoother is not None and "labels" in inputs:
+            labels = inputs.pop("labels")
+        else:
+            labels = None
+        outputs = model(**inputs)
+        # Save past state if it exists
+        # TODO: this needs to be fixed and made cleaner later.
+        if self.args.past_index >= 0:
+            self._past = outputs[self.args.past_index]
 
+        if labels is not None:
+            loss = self.label_smoother(outputs, labels)
+        else:
+            # We don't use .loss here since the model may return tuples instead of ModelOutput.
+            loss = outputs["loss"] if isinstance(outputs, dict) else outputs[0]
+            if "ner_loss" in outputs.keys():
+                ner_loss = outputs["ner_loss"] if isinstance(outputs, dict) else outputs[0]
+                re_loss = outputs["re_loss"] if isinstance(outputs, dict) else outputs[0]
+                self.log({"ner_loss": ner_loss.item(),"re_loss":re_loss.item()})
+
+        return (loss, outputs) if return_outputs else loss
+    
+    
 class XfunCellSerTrainer(FunsdTrainer):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)

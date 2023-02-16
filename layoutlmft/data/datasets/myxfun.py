@@ -57,6 +57,7 @@ class XFUN(datasets.GeneratorBasedBuilder):
                             "end": datasets.Value("int64"),
                             "label": datasets.ClassLabel(names=["HEADER", "QUESTION", "ANSWER", "SINGLE", "ANSWERNUM"]),
                             "pred_label": datasets.ClassLabel(names=["HEADER", "QUESTION", "ANSWER", "SINGLE", "ANSWERNUM"]),
+                            "id":datasets.Value(dtype='string'),
                         }
                     ),
                     "relations": datasets.Sequence(
@@ -125,6 +126,7 @@ class XFUN(datasets.GeneratorBasedBuilder):
             for doc in data["documents"]:
                 doc["img"]["fpath"] = os.path.join(filepath[1], doc["img"]["fname"])
                 image, size = load_image(doc["img"]["fpath"])
+                id = doc['id']
                 document = doc["document"]
                 tokenized_doc = {"input_ids": [], "bbox": [], "labels": []}
                 entities = []
@@ -182,6 +184,7 @@ class XFUN(datasets.GeneratorBasedBuilder):
                                     "end": len(tokenized_doc["input_ids"]) + len(tokenized_inputs["input_ids"]),
                                     "label": line["label"].upper(),
                                     "pred_label": line["pred_label"].upper(),
+                                    "id":id,
                                 }
                             )
                         else:
@@ -191,6 +194,7 @@ class XFUN(datasets.GeneratorBasedBuilder):
                                     "end": len(tokenized_doc["input_ids"]) + len(tokenized_inputs["input_ids"]),
                                     "label": line["label"].upper(),
                                     "pred_label": "question".upper(),
+                                    "id":id,
                                 }
                             )
                     for i in tokenized_doc:

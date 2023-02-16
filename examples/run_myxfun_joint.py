@@ -16,7 +16,7 @@ from layoutlmft.data.data_collator import DataCollatorForKeyValueExtraction
 from layoutlmft.evaluation import re_score
 from layoutlmft.models.model_args import ModelArguments
 from layoutlmft.models.layoutlmv2 import LayoutLMv2ForJointCellClassification
-from layoutlmft.trainers import XfunReTrainer
+from layoutlmft.trainers import XfunJointTrainer
 from transformers import (
     AutoConfig,
     AutoTokenizer,
@@ -89,8 +89,8 @@ def main():
     #     keep_in_memory=True,
     # )
     datasets = load_dataset(
-        '/home/zhanghang-s21/data/layoutlmft/layoutlmft/data/datasets/myxfun.py',
-        "myxfun.zh",
+        '/home/zhanghang-s21/data/layoutlmft/layoutlmft/data/datasets/myxfunsplit.py',
+        "myxfunsplit.zh",
         additional_langs=data_args.additional_langs,
         keep_in_memory=True,
     )
@@ -209,7 +209,7 @@ def main():
         return score
 
     # Initialize our Trainer
-    trainer = XfunReTrainer(
+    trainer = XfunJointTrainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset if training_args.do_train else None,

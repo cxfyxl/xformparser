@@ -57,6 +57,7 @@ class XFUN(datasets.GeneratorBasedBuilder):
             features=datasets.Features(
                 {
                     "id": datasets.Value("string"),
+                    "len": datasets.Value("int64"),
                     "input_ids": datasets.Sequence(datasets.Value("int64")),
                     "bbox": datasets.Sequence(datasets.Sequence(datasets.Value("int64"))),
                     "labels": datasets.Sequence(
@@ -383,6 +384,7 @@ class XFUN(datasets.GeneratorBasedBuilder):
                     item.update(
                         {
                             "id": f"{doc['id']}_{n}",
+                            "len":len(item["input_ids"]), 
                             "image": image,
                             "entities": entities,
                             "relations": relations,

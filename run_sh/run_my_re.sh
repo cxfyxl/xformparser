@@ -1,7 +1,7 @@
 CUDA_VISIBLE_DEVICES=0 python examples/run_myxfun_re.py \
         --overwrite_output_dir \
         --model_name_or_path microsoft/layoutxlm-base \
-        --output_dir ./mytmp/haslabel-remeantest \
+        --output_dir ./mytmp/haslabel-remaxtest \
         --evaluation_strategy steps --eval_steps 100 \
         --save_strategy steps --save_steps 100 \
         --load_best_model_at_end \

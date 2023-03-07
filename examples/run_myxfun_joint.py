@@ -196,7 +196,8 @@ def main():
     if training_args.do_eval:
         if "validation" not in datasets:
             raise ValueError("--do_eval requires a validation dataset")
-        eval_dataset = datasets["validation"]
+        eval_dataset = datasets["validation"].sort("len",reverse=False)
+        # eval_dataset = eval_dataset
         if data_args.max_val_samples is not None:
             eval_dataset = eval_dataset.select(range(data_args.max_val_samples))
 

@@ -56,7 +56,7 @@ class REDecoder(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.entity_emb = nn.Embedding(5, config.hidden_size, scale_grad_by_freq=True)
-        self.mlp_dim = config.hidden_size * 2
+        self.mlp_dim = config.hidden_size * 1
         projection = nn.Sequential(
             nn.Linear(self.mlp_dim, self.mlp_dim // 2),
             nn.ReLU(),

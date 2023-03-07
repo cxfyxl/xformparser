@@ -172,9 +172,9 @@ def main():
             eval_dataset = eval_dataset.select(range(data_args.max_val_samples))
 
     if training_args.do_predict:
-        # if "test" not in datasets:
-        #     raise ValueError("--do_predict requires a test dataset")
-        test_dataset = datasets["validation"]
+        if "test" not in datasets:
+            raise ValueError("--do_predict requires a test dataset")
+        test_dataset = datasets["test"]
         if data_args.max_test_samples is not None:
             test_dataset = test_dataset.select(range(data_args.max_test_samples))
 

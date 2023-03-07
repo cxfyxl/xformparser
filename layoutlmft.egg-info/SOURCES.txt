@@ -13,11 +13,13 @@ layoutlmft.egg-info/top_level.txt
 layoutlmft/data/__init__.py
 layoutlmft/data/data_args.py
 layoutlmft/data/data_collator.py
+layoutlmft/data/test.py
 layoutlmft/data/utils.py
 layoutlmft/data/datasets/__init__.py
 layoutlmft/data/datasets/funsd.py
 layoutlmft/data/datasets/myxfun.py
 layoutlmft/data/datasets/myxfuninfer.py
+layoutlmft/data/datasets/myxfunsplit.py
 layoutlmft/data/datasets/xfun.py
 layoutlmft/models/__init__.py
 layoutlmft/models/model_args.py
@@ -33,12 +35,6 @@ layoutlmft/models/layoutxlm/configuration_layoutxlm.py
 layoutlmft/models/layoutxlm/modeling_layoutxlm.py
 layoutlmft/models/layoutxlm/tokenization_layoutxlm.py
 layoutlmft/models/layoutxlm/tokenization_layoutxlm_fast.py
-layoutlmft/models/mymodel/__init__.py
-layoutlmft/models/mymodel/configuration_layoutlmv2.py
-layoutlmft/models/mymodel/detectron2_config.py
-layoutlmft/models/mymodel/modeling_layoutlmv2.py
-layoutlmft/models/mymodel/tokenization_layoutlmv2.py
-layoutlmft/models/mymodel/tokenization_layoutlmv2_fast.py
 layoutlmft/modules/__init__.py
 layoutlmft/modules/decoders/__init__.py
 layoutlmft/modules/decoders/re.py

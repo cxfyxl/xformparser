@@ -7,7 +7,7 @@ import sys
 import json
 import numpy as np
 from datasets import ClassLabel, load_dataset
-import wandb
+# import wandb
 import layoutlmft.data.datasets.xfun
 import transformers
 from layoutlmft import AutoModelForRelationExtraction
@@ -27,10 +27,8 @@ from transformers import (
 )
 from transformers.trainer_utils import get_last_checkpoint, is_main_process
 
-from transformers import AdamW
-
 # set the wandb project where this run will be logged
-
+os.environ["WANDB_PROJECT"]="my-joint-re"
 
 # save your trained model checkpoint to wandb
 os.environ["WANDB_LOG_MODEL"]="true"
@@ -99,15 +97,13 @@ def main():
     #     additional_langs=data_args.additional_langs,
     #     keep_in_memory=True,
     # )
-    
     datasets = load_dataset(
-        '/home/zhanghang-s21/data/layoutlmft/layoutlmft/data/datasets/myxfunsplit_new.py',
-        "myxfunsplit_new.zh",
+        '/home/zhanghang-s21/data/layoutlmft/layoutlmft/data/datasets/xfun.py',
+        "xfun.zh",
         additional_langs=data_args.additional_langs,
         keep_in_memory=True,
     )
-    # shuffled_ds = datasets.shuffle(seed=training_args.seed)
-    # test_name = "test"
+    test_name = "validation"
     if training_args.do_train:
         column_names = datasets["train"].column_names
         features = datasets["train"].features
@@ -115,10 +111,10 @@ def main():
         column_names = datasets["validation"].column_names
         features = datasets["validation"].features
     else:
-        column_names = datasets["test"].column_names
-        features = datasets["test"].features
-        # column_names = datasets[test_name].column_names
-        # features = datasets[test_name].features
+        # column_names = datasets["test"].column_names
+        # features = datasets["test"].features
+        column_names = datasets[test_name].column_names
+        features = datasets[test_name].features
     
     text_column_name = "input_ids"
     label_column_name = "labels"
@@ -173,7 +169,7 @@ def main():
         use_auth_token=True if model_args.use_auth_token else None,
     )
     
-    # optimizer = AdamW([{"params":model.classifier,"lr":1e-5}],lr=5e-5)
+
     # Tokenizer check: this script requires a fast tokenizer.
     if not isinstance(tokenizer, PreTrainedTokenizerFast):
         raise ValueError(
@@ -189,7 +185,7 @@ def main():
     if training_args.do_train:
         if "train" not in datasets:
             raise ValueError("--do_train requires a train dataset")
-        train_dataset = datasets["train"]# .sort("len",reverse=False)
+        train_dataset = datasets["train"] #.sort("len",reverse=False)
         if data_args.max_train_samples is not None:
             train_dataset = train_dataset.select(range(data_args.max_train_samples))
 
@@ -201,9 +197,9 @@ def main():
             eval_dataset = eval_dataset.select(range(data_args.max_val_samples))
 
     if training_args.do_predict:
-        if "test" not in datasets:
-            raise ValueError("--do_predict requires a test dataset")       
-        test_dataset = datasets["test"]
+        # if "test" not in datasets:
+        #     raise ValueError("--do_predict requires a test dataset")       
+        test_dataset = datasets[test_name]
         if data_args.max_test_samples is not None:
             print("begin predict")
             test_dataset = test_dataset.select(range(data_args.max_test_samples))
@@ -229,17 +225,11 @@ def main():
         eval_dataset=eval_dataset if training_args.do_eval else None,
         # test_dataset=test_dataset if training_args.do_predict else None,
         tokenizer=tokenizer,
-        # optimizer=optimizer,
         data_collator=data_collator,
         compute_metrics=compute_metrics,
     )
-    trainer.test_dataset = test_dataset
-    # trainer.    
-    # trainer.create_optimizer_and_scheduler(trainer.args.max_steps)
     
-    # trainer.optimizer =  AdamW([{"params":model.classifier.parameters(),"lr":1e-5},
-    #                 {"params":model.layoutlmv2.parameters()},
-    #                 {"params":model.extractor.parameters()}],lr=5e-5)
+
 
     # Training
     if training_args.do_train:
@@ -272,13 +262,13 @@ def main():
     if training_args.do_predict:
         logger.info("*** Predict ***")       
         predictions, labels, metrics = trainer.predict(test_dataset)
-        # Save predictions
-        print(metrics)
-        trainer.log_metrics("test", metrics)
-        trainer.save_metrics("test", metrics)
-        # output_test_predictions_file = os.path.join(training_args.output_dir, test_name + "_data_test_predictions_re.json")
-        # with open(output_test_predictions_file, 'w') as f:
-        #     json.dump({'pred':predictions, 'label': labels}, f)
+        # # Save predictions
+        # print(metrics)
+        # trainer.log_metrics("test", metrics)
+        # trainer.save_metrics("test", metrics)
+        output_test_predictions_file = os.path.join(training_args.output_dir, test_name + "_data_test_predictions_re.json")
+        with open(output_test_predictions_file, 'w') as f:
+            json.dump({'pred':predictions, 'label': labels}, f)
     wandb.finish()
 
 

@@ -4,48 +4,42 @@
 import logging
 import os
 import sys
-import json
+from dataclasses import dataclass, field
+from typing import Optional
+
 import numpy as np
-from datasets import ClassLabel, load_dataset
-import wandb
+from datasets import ClassLabel, load_dataset, load_metric
+
 import layoutlmft.data.datasets.xfun
 import transformers
-from layoutlmft import AutoModelForRelationExtraction
+from layoutlmft.data import DataCollatorForKeyValueExtraction
 from layoutlmft.data.data_args import XFUNDataTrainingArguments
-from layoutlmft.data.data_collator import DataCollatorForKeyValueExtraction
-from layoutlmft.evaluation import re_score
 from layoutlmft.models.model_args import ModelArguments
-from layoutlmft.models.layoutlmv2 import LayoutLMv2ForJointCellClassification
-from layoutlmft.trainers import XfunJointTrainer
+from layoutlmft.models.layoutlmv2 import LayoutLMv2ForCellClassification
+from layoutlmft.trainers import XfunSerTrainer, XfunCellSerTrainer
+# from layoutlmft.evaluation import re_score
 from transformers import (
     AutoConfig,
+    AutoModelForTokenClassification,
     AutoTokenizer,
+    AutoModelForSequenceClassification,
     HfArgumentParser,
     PreTrainedTokenizerFast,
     TrainingArguments,
     set_seed,
 )
 from transformers.trainer_utils import get_last_checkpoint, is_main_process
+from transformers.utils import check_min_version
+import evaluate
+from sklearn.metrics import f1_score, accuracy_score, recall_score,precision_score,classification_report
 
-from transformers import AdamW
-
-# set the wandb project where this run will be logged
-
-
-# save your trained model checkpoint to wandb
-os.environ["WANDB_LOG_MODEL"]="true"
-
-# turn off watch to log faster
-os.environ["WANDB_WATCH"]="false"
-
+# Will error if the minimal version of Transformers is not installed. Remove at your own risks.
+check_min_version("4.5.0")
 
 logger = logging.getLogger(__name__)
 
 
 def main():
-    # See all possible arguments in src/transformers/training_args.py
-    # or by passing the --help flag to this script.
-    # We now keep distinct sets of args, for a cleaner separation of concerns.
 
     parser = HfArgumentParser((ModelArguments, XFUNDataTrainingArguments, TrainingArguments))
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
@@ -54,8 +48,7 @@ def main():
         model_args, data_args, training_args = parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))
     else:
         model_args, data_args, training_args = parser.parse_args_into_dataclasses()
-    print("-"*10)
-    print(data_args)
+
     # Detecting last checkpoint.
     last_checkpoint = None
     if os.path.isdir(training_args.output_dir) and training_args.do_train and not training_args.overwrite_output_dir:
@@ -93,33 +86,18 @@ def main():
 
     # Set seed before initializing model.
     set_seed(training_args.seed)
-    # datasets = load_dataset(
-    #     os.path.abspath(layoutlmft.data.datasets.xfun.__file__),
-    #     f"xfun.{data_args.lang}",
-    #     additional_langs=data_args.additional_langs,
-    #     keep_in_memory=True,
-    # )
-    
     datasets = load_dataset(
-        '/home/zhanghang-s21/data/layoutlmft/layoutlmft/data/datasets/myxfunsplit_new.py',
-        "myxfunsplit_new.zh",
+        '/home/zhanghang-s21/data/layoutlmft/layoutlmft/data/datasets/myxfun.py',
+        "myxfun.zh",
         additional_langs=data_args.additional_langs,
         keep_in_memory=True,
     )
-    # shuffled_ds = datasets.shuffle(seed=training_args.seed)
-    # test_name = "test"
     if training_args.do_train:
         column_names = datasets["train"].column_names
         features = datasets["train"].features
-    elif training_args.do_eval:
+    else:
         column_names = datasets["validation"].column_names
         features = datasets["validation"].features
-    else:
-        column_names = datasets["test"].column_names
-        features = datasets["test"].features
-        # column_names = datasets[test_name].column_names
-        # features = datasets[test_name].features
-    
     text_column_name = "input_ids"
     label_column_name = "labels"
 
@@ -164,7 +142,7 @@ def main():
         revision=model_args.model_revision,
         use_auth_token=True if model_args.use_auth_token else None,
     )
-    model = LayoutLMv2ForJointCellClassification.from_pretrained(
+    model = LayoutLMv2ForCellClassification.from_pretrained(
         model_args.model_name_or_path,
         from_tf=bool(".ckpt" in model_args.model_name_or_path),
         config=config,
@@ -172,8 +150,7 @@ def main():
         revision=model_args.model_revision,
         use_auth_token=True if model_args.use_auth_token else None,
     )
-    
-    # optimizer = AdamW([{"params":model.classifier,"lr":1e-5}],lr=5e-5)
+
     # Tokenizer check: this script requires a fast tokenizer.
     if not isinstance(tokenizer, PreTrainedTokenizerFast):
         raise ValueError(
@@ -185,11 +162,11 @@ def main():
     # Preprocessing the dataset
     # Padding strategy
     padding = "max_length" if data_args.pad_to_max_length else False
-
+    test_name = "validation"
     if training_args.do_train:
         if "train" not in datasets:
             raise ValueError("--do_train requires a train dataset")
-        train_dataset = datasets["train"]# .sort("len",reverse=False)
+        train_dataset = datasets["train"]
         if data_args.max_train_samples is not None:
             train_dataset = train_dataset.select(range(data_args.max_train_samples))
 
@@ -197,15 +174,15 @@ def main():
         if "validation" not in datasets:
             raise ValueError("--do_eval requires a validation dataset")
         eval_dataset = datasets["validation"]
+        # eval_dataset = datasets["train"]
         if data_args.max_val_samples is not None:
             eval_dataset = eval_dataset.select(range(data_args.max_val_samples))
 
     if training_args.do_predict:
-        if "test" not in datasets:
-            raise ValueError("--do_predict requires a test dataset")       
-        test_dataset = datasets["test"]
+        # if "test" not in datasets:
+        #     raise ValueError("--do_predict requires a test dataset")
+        test_dataset = datasets[test_name]
         if data_args.max_test_samples is not None:
-            print("begin predict")
             test_dataset = test_dataset.select(range(data_args.max_test_samples))
 
     # Data collator
@@ -216,30 +193,77 @@ def main():
         max_length=512,
     )
 
-    def compute_metrics(p):
-        pred_relations, gt_relations = p
-        score = re_score(pred_relations, gt_relations, mode="boundaries")
-        return score
+    # Metrics
+    metric = evaluate.load("/home/zhanghang-s21/data/mycache/metrics/seqeval")
+    # metric = load_metric("accuracy")
+    # metric = load_metric("/home/zhanghang-s21/data/mycache/metrics/seqeval")
 
+    def compute_metrics(p):
+        predictions, labels = p
+        predictions_result,labels_result = [],[]
+        for i, pedictions in enumerate(predictions):
+            prediction = predictions[i].cpu()
+            prediction = np.argmax(prediction, axis=-1).int()
+            prediction = prediction.int().numpy().tolist()
+            label = labels[i].cpu().int().numpy().tolist()
+            predictions_result.extend(prediction)
+            labels_result.extend(label)
+        
+        # labels = labels.cpu().int().numpy().tolist()
+        # predictions_result = [i for i in prediction]
+        results = {}
+        results["accuracy_score"] = accuracy_score(labels_result,predictions_result)
+        results["f1_score_micro"] = f1_score(labels_result,predictions_result,average="micro")
+        results["f1_score_macro"] = f1_score(labels_result,predictions_result,average='macro')
+        print("classification report:\n{}".format(classification_report(labels_result,predictions_result)))
+        # results = metric.compute(predictions=[predictions_result], references=[labels_result])
+        
+
+        # if data_args.return_entity_level_metrics:
+        #     # Unpack nested dictionaries
+        #     final_results = {}
+        #     for key, value in results.items():
+        #         if isinstance(value, dict):
+        #             for n, v in value.items():
+        #                 final_results[f"{key}_{n}"] = v
+        #         else:
+        #             final_results[key] = value
+        #     return final_results
+        # else:
+        #     return {
+        #         "precision": results["overall_precision"],
+        #         "recall": results["overall_recall"],
+        #         "f1": results["overall_f1"],
+        #         "accuracy": results["overall_accuracy"],
+        # }
+
+        return {
+                "precision": results["accuracy_score"],
+                "recall": results["accuracy_score"],
+                "f1": results["accuracy_score"],
+                "accuracy": results["accuracy_score"],
+            }
+        # return results
+ 
     # Initialize our Trainer
-    trainer = XfunJointTrainer(
+    # trainer = XfunSerTrainer(
+    #     model=model,
+    #     args=training_args,
+    #     train_dataset=train_dataset if training_args.do_train else None,
+    #     eval_dataset=eval_dataset if training_args.do_eval else None,
+    #     tokenizer=tokenizer,
+    #     data_collator=data_collator,
+    #     compute_metrics=compute_metrics,
+    # )
+    trainer = XfunCellSerTrainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset if training_args.do_train else None,
         eval_dataset=eval_dataset if training_args.do_eval else None,
-        # test_dataset=test_dataset if training_args.do_predict else None,
         tokenizer=tokenizer,
-        # optimizer=optimizer,
         data_collator=data_collator,
         compute_metrics=compute_metrics,
     )
-    trainer.test_dataset = test_dataset
-    # trainer.    
-    # trainer.create_optimizer_and_scheduler(trainer.args.max_steps)
-    
-    # trainer.optimizer =  AdamW([{"params":model.classifier.parameters(),"lr":1e-5},
-    #                 {"params":model.layoutlmv2.parameters()},
-    #                 {"params":model.extractor.parameters()}],lr=5e-5)
 
     # Training
     if training_args.do_train:
@@ -268,18 +292,29 @@ def main():
 
         trainer.log_metrics("eval", metrics)
         trainer.save_metrics("eval", metrics)
+
     # Predict
     if training_args.do_predict:
-        logger.info("*** Predict ***")       
+        logger.info("*** Predict ***")
+
         predictions, labels, metrics = trainer.predict(test_dataset)
-        # Save predictions
-        print(metrics)
+        for prediction in predictions:
+            prediction = prediction.cpu()
+            prediction = np.argmax(prediction, axis=-1).int()
+            prediction = prediction.int().numpy().tolist()
+
+
+        # Remove ignored index (special tokens)
+
         trainer.log_metrics("test", metrics)
         trainer.save_metrics("test", metrics)
-        # output_test_predictions_file = os.path.join(training_args.output_dir, test_name + "_data_test_predictions_re.json")
-        # with open(output_test_predictions_file, 'w') as f:
-        #     json.dump({'pred':predictions, 'label': labels}, f)
-    wandb.finish()
+
+        # Save predictions
+        output_test_predictions_file = os.path.join(training_args.output_dir, test_name + "_data_test_predictions2.txt")
+        if trainer.is_world_process_zero():
+            with open(output_test_predictions_file, "w") as writer:
+                for prediction in predictions:
+                    writer.write(" ".join(prediction) + "\n")
 
 
 def _mp_fn(index):

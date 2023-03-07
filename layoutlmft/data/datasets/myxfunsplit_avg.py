@@ -38,7 +38,7 @@ class XFUNConfig(datasets.BuilderConfig):
 class XFUN(datasets.GeneratorBasedBuilder):
     """XFUN dataset."""
 
-    BUILDER_CONFIGS = [XFUNConfig(name=f"myxfunsplit.{lang}", lang=lang) for lang in _LANG]
+    BUILDER_CONFIGS = [XFUNConfig(name=f"myxfunsplit_avg.{lang}", lang=lang) for lang in _LANG]
     ocr_data = {}
     input_ocr = ["/home/zhanghang-s21/data/bishe/ocr_data/aistrong_ocr_train", \
                 "/home/zhanghang-s21/data/bishe/ocr_data/aistrong_ocr_mytrain", \
@@ -266,16 +266,16 @@ class XFUN(datasets.GeneratorBasedBuilder):
         id2label = {}
         tokenizer = self.tokenizer
         
-        
+        group_total_len = 0
         for groups in group_src:
             group_doc = {"input_ids": [], "bbox": [], "labels": []}
             group_entities =[]
             # pre = len(entities)
             for group in groups:
                 _, line = group
-                if len(line["text"]) >= 200:
+                if len(line["text"]) >= 90:
                     print(line["text"])
-                    line["text"] = "<s></s>"
+                    line["text"] = "#$$$$$$$#"
                     print(line["label"])
                 tokenized_inputs = tokenizer(
                         line["text"],
@@ -302,12 +302,19 @@ class XFUN(datasets.GeneratorBasedBuilder):
                 for j in group_doc:
                     group_doc[j] = group_doc[j] + tokenized_inputs[j]     
             group_doc_src.append((len(group_doc["input_ids"]), group_entities, group_doc))
+            group_total_len += len(group_doc["input_ids"])
             
     
         tokenized_doc_src = []
         entities_src = []
         entity_id_to_index_map_src = []
         relations_src = []
+
+        maxsteps = 512
+        import math
+        if group_total_len > 512:
+            j = math.ceil(group_total_len/512)
+            maxsteps = min(512 // j + 50, 512)
         while len(group_doc_src) > 0:
             i = 0
             tokenized_doc = {"input_ids": [],"bbox": [], "labels": []}
@@ -318,7 +325,7 @@ class XFUN(datasets.GeneratorBasedBuilder):
                 group_len, group_entities, group_doc = group_doc_src[i]
 
                     
-                if group_len + len(tokenized_doc['input_ids']) <= 512:
+                if group_len + len(tokenized_doc['input_ids']) <= maxsteps:
                     pre = len(tokenized_doc["input_ids"])
                     pre_index = len(entities)
                     for j in tokenized_doc:

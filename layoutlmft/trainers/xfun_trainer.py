@@ -45,8 +45,6 @@ from torch import nn
 from torch.utils.data.dataloader import DataLoader
 from torch.utils.data.dataset import Dataset
 from torch.utils.data.distributed import DistributedSampler
-from torch.utils.data.sampler import RandomSampler, SequentialSampler
-
 from transformers.data.data_collator import DataCollator, DataCollatorWithPadding, default_data_collator
 from transformers.file_utils import (
     WEIGHTS_NAME,
@@ -121,6 +119,7 @@ class XfunReTrainer(FunsdTrainer):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.label_names.append("relations")
+        self.test_dataset = None
 
     def prediction_step(
         self,
@@ -246,7 +245,7 @@ class XfunReTrainer(FunsdTrainer):
     
     def predict(
         self,
-        test_dataset: Optional[Dataset] = None,
+        test_dataset: Optional[Dataset] = None, # args.local_rank
         ignore_keys: Optional[List[str]] = None,
         metric_key_prefix: str = "test",  
     ):
@@ -256,7 +255,7 @@ class XfunReTrainer(FunsdTrainer):
         self.args.local_rank = -1
         test_dataloader = self.get_test_dataloader(test_dataset)
         # 不使用多卡
-        # self.args.local_rank = torch.distributed.get_rank()
+        self.args.local_rank = torch.distributed.get_rank()
 
         start_time = time.time()
 
@@ -312,7 +311,7 @@ class XfunReTrainer(FunsdTrainer):
 
         self.args.local_rank = -1
         eval_dataloader = self.get_eval_dataloader(eval_dataset)
-        # self.args.local_rank = torch.distributed.get_rank()
+        self.args.local_rank = torch.distributed.get_rank()
 
         start_time = time.time()
 
@@ -363,11 +362,35 @@ class XfunReTrainer(FunsdTrainer):
 
         return (loss, outputs) if return_outputs else loss
     
+    def _maybe_log_save_evaluate(self, tr_loss, model, trial, epoch):
+        if self.control.should_log:
+            logs: Dict[str, float] = {}
+            tr_loss_scalar = tr_loss.item()
+            # reset tr_loss to zero
+            tr_loss -= tr_loss
+
+            logs["loss"] = round(tr_loss_scalar / (self.state.global_step - self._globalstep_last_logged), 4)
+            logs["learning_rate"] = self._get_learning_rate()
+
+            self._total_loss_scalar += tr_loss_scalar
+            self._globalstep_last_logged = self.state.global_step
+
+            self.log(logs)
+
+        metrics = None
+        if self.control.should_evaluate:
+            metrics = self.evaluate()
+            self._report_to_hp_search(trial, epoch, metrics)
+            predictions, labels, metrics = self.predict(self.test_dataset)
+            self._report_to_hp_search(trial, epoch, metrics)
+
+
     
 class XfunCellSerTrainer(FunsdTrainer):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.label_names.append("entities")
+        self.test_dataset = None
 
     def prediction_step(
             self,
@@ -434,23 +457,17 @@ class XfunCellSerTrainer(FunsdTrainer):
             outputs, labels = self.prediction_step(model, inputs, prediction_loss_only, ignore_keys=ignore_keys)
             
             # temp_labels = torch.tensor([i['label'] for i in labels[1]],device=self.args.device)
-            temp = torch.tensor([x for j in [i['label'] for i in labels[1]] for x in j],device=self.args.device)
-            if len(temp) == 0:
-                continue
+            for b in range(len(inputs['entities'])):
+                temp = inputs['entities'][b]['label']
+                if len(temp) == 0:
+                    continue
                 # continue
-            loss = outputs.loss.mean() if loss == None else loss + outputs.loss.mean()
-            entity_labels =  (temp, ) if entity_labels is None else entity_labels + (temp,)
-            preds = (outputs['logits'][0], ) if preds is None else preds + (outputs['logits'][0], )
+                loss = outputs.loss.mean() if loss == None else loss + outputs.loss.mean()
+                entity_labels =  (temp, ) if entity_labels is None else entity_labels + (temp,)
+                preds = (outputs['logits'][b], ) if preds is None else preds + (outputs['logits'][b], )
             # 
             self.control = self.callback_handler.on_prediction_step(self.args, self.state, self.control)
-            # temp = torch.tensor([x for j in [i['label'] for i in labels[1]] for x in j],device=self.args.device)
-            # if len(temp) == 0:
-            #     continue
-            # entity_labels =  temp if entity_labels is None else torch.cat([entity_labels, temp], dim=-1)
-            
-            # preds = outputs['logits'][0] if preds is None else torch.cat([preds, outputs['logits'][0]])
-            # # 
-            # self.control = self.callback_handler.on_prediction_step(self.args, self.state, self.control)
+
         
         if self.compute_metrics is not None and preds is not None and entity_labels is not None:
             metrics = self.compute_metrics(EvalPrediction(predictions=preds, label_ids=entity_labels))
@@ -458,11 +475,13 @@ class XfunCellSerTrainer(FunsdTrainer):
             metrics = {}
        # re_metrics[f"{metric_key_prefix}_loss"] = outputs.loss.mean().item()
         metrics[f"{metric_key_prefix}_loss"] = loss.item()
+        metrics[f"{metric_key_prefix}_accuracy"] = metrics["accuracy"]
         return PredictionOutput(preds, entity_labels, metrics)
 
     def evaluate(
             self,
             eval_dataset: Optional[Dataset] = None,
+            test_dataset: Optional[Dataset] = None,
             ignore_keys: Optional[List[str]] = None,
             metric_key_prefix: str = "eval",
     ) -> Dict[str, float]:
@@ -491,13 +510,18 @@ class XfunCellSerTrainer(FunsdTrainer):
 
         self.args.local_rank = -1
         eval_dataloader = self.get_eval_dataloader(eval_dataset)
-        # self.args.local_rank = torch.distributed.get_rank()
+        # test_dataloader = self.get_eval_dataloader(test_dataset)
+        description="Evaluation"
+        # if test_dataset != None:
+        #     description="Prediction"
+        #     metric_key_prefix = "test"
+
 
         start_time = time.time()
 
         outputPrediction = self.prediction_loop(
             eval_dataloader,
-            description="Evaluation",
+            description=description,
             # No point gathering the predictions if there are no metrics, otherwise we defer to
             # self.args.prediction_loss_only
             prediction_loss_only=True if self.compute_metrics is None else None,
@@ -514,12 +538,38 @@ class XfunCellSerTrainer(FunsdTrainer):
         return metrics
     
     
+    # def _maybe_log_save_evaluate(self, tr_loss, model, trial, epoch):
+    #     if self.control.should_log:
+    #         logs: Dict[str, float] = {}
+    #         tr_loss_scalar = tr_loss.item()
+    #         # reset tr_loss to zero
+    #         tr_loss -= tr_loss
+
+    #         logs["loss"] = round(tr_loss_scalar / (self.state.global_step - self._globalstep_last_logged), 4)
+    #         logs["learning_rate"] = self._get_learning_rate()
+
+    #         self._total_loss_scalar += tr_loss_scalar
+    #         self._globalstep_last_logged = self.state.global_step
+
+    #         self.log(logs)
+
+    #     metrics = None
+    #     if self.control.should_evaluate:
+    #         metrics = self.evaluate()
+    #         self._report_to_hp_search(trial, epoch, metrics)
+    #         metrics = self.evaluate(self.test_dataset,metric_key_prefix="test")
+    #         self._report_to_hp_search(trial, epoch, metrics)
+
+    #     if self.control.should_save:
+    #         self._save_checkpoint(model, trial, metrics=metrics)
+    #         self.control = self.callback_handler.on_save(self.args, self.state, self.control)
 
 
 class XfunJointTrainer(FunsdTrainer):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.label_names.append("relations")
+        self.test_dataset = None
 
     def prediction_step(
         self,
@@ -711,7 +761,7 @@ class XfunJointTrainer(FunsdTrainer):
 
         self.args.local_rank = -1
         eval_dataloader = self.get_eval_dataloader(eval_dataset)
-        # self.args.local_rank = torch.distributed.get_rank()
+        self.args.local_rank = torch.distributed.get_rank()
 
         start_time = time.time()
 
@@ -761,3 +811,26 @@ class XfunJointTrainer(FunsdTrainer):
                 self.log({"ner_loss": ner_loss.item(),"re_loss":re_loss.item()})
 
         return (loss, outputs) if return_outputs else loss
+    
+
+    def _maybe_log_save_evaluate(self, tr_loss, model, trial, epoch):
+        if self.control.should_log:
+            logs: Dict[str, float] = {}
+            tr_loss_scalar = tr_loss.item()
+            # reset tr_loss to zero
+            tr_loss -= tr_loss
+
+            logs["loss"] = round(tr_loss_scalar / (self.state.global_step - self._globalstep_last_logged), 4)
+            logs["learning_rate"] = self._get_learning_rate()
+
+            self._total_loss_scalar += tr_loss_scalar
+            self._globalstep_last_logged = self.state.global_step
+
+            self.log(logs)
+
+        metrics = None
+        if self.control.should_evaluate:
+            metrics = self.evaluate()
+            self._report_to_hp_search(trial, epoch, metrics)
+            predictions, labels, metrics = self.predict(self.test_dataset)
+            self._report_to_hp_search(trial, epoch, metrics)

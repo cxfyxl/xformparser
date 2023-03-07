@@ -12,6 +12,7 @@ from datasets import ClassLabel, load_dataset, load_metric
 
 import layoutlmft.data.datasets.xfun
 import transformers
+from transformers import EarlyStoppingCallback
 from layoutlmft.data import DataCollatorForKeyValueExtraction
 from layoutlmft.data.data_args import XFUNDataTrainingArguments
 from layoutlmft.models.model_args import ModelArguments
@@ -235,6 +236,7 @@ def main():
         tokenizer=tokenizer,
         data_collator=data_collator,
         compute_metrics=compute_metrics,
+        callbacks=[EarlyStoppingCallback(3, 0.0)]
     )
 
     # Training

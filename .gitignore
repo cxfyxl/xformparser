@@ -2,6 +2,14 @@
 # 以下是忽略的文件
 log
 mylog
+mylog_pub
 mytmp
+nerlog
+nertmp
+myre
+myrelog
 runs
 tmp
+wandb
+mytmp_pub
+mytmp2

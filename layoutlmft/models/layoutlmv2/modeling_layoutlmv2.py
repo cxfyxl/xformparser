@@ -895,8 +895,116 @@ class LayoutLMv2ForTokenClassification(LayoutLMv2PreTrainedModel):
 
 
 
+from torch.autograd import Variable
+class FocalLoss(nn.Module):
+    r"""
+        This criterion is a implemenation of Focal Loss, which is proposed in 
+        Focal Loss for Dense Object Detection.
+
+            Loss(x, class) = - \alpha (1-softmax(x)[class])^gamma \log(softmax(x)[class])
+
+        The losses are averaged across observations for each minibatch.
+
+        Args:
+            alpha(1D Tensor, Variable) : the scalar factor for this criterion
+            gamma(float, double) : gamma > 0; reduces the relative loss for well-classiﬁed examples (p > .5), 
+                                   putting more focus on hard, misclassiﬁed examples
+            size_average(bool): By default, the losses are averaged over observations for each minibatch.
+                                However, if the field size_average is set to False, the losses are
+                                instead summed for each minibatch.
 
 
+    """
+    def __init__(self, class_num, alpha=None, gamma=2, size_average=True):
+        super(FocalLoss, self).__init__()
+        if alpha is None:
+            self.alpha = Variable(torch.ones(class_num, 1))
+        else:
+            if isinstance(alpha, Variable):
+                self.alpha = alpha
+            else:
+                self.alpha = Variable(alpha)
+        self.gamma = gamma
+        self.class_num = class_num
+        self.size_average = size_average
+
+    def forward(self, inputs, targets):
+        N = inputs.size(0)
+        C = inputs.size(1)
+        P = F.softmax(inputs)
+
+        class_mask = inputs.data.new(N, C).fill_(0)
+        class_mask = Variable(class_mask)
+        ids = targets.view(-1, 1)
+        class_mask.scatter_(1, ids.data, 1.)
+        #print(class_mask)
+
+
+        if inputs.is_cuda and not self.alpha.is_cuda:
+            self.alpha = self.alpha.cuda()
+        alpha = self.alpha[ids.data.view(-1)]
+
+        probs = (P*class_mask).sum(1).view(-1,1)
+
+        log_p = probs.log()
+        #print('probs size= {}'.format(probs.size()))
+        #print(probs)
+
+        batch_loss = -alpha*(torch.pow((1-probs), self.gamma))*log_p 
+        #print('-----bacth_loss------')
+        #print(batch_loss)
+
+
+        if self.size_average:
+            loss = batch_loss.mean()
+        else:
+            loss = batch_loss.sum()
+        return loss
+    
+class DiceLoss(nn.Module):
+	def __init__(self):
+		super(DiceLoss, self).__init__()
+ 
+	def	forward(self, input, target):
+		N = target.size(0)
+		smooth = 1
+ 
+		input_flat = input.view(N, -1)
+		target_flat = target.view(N, -1)
+ 
+		intersection = input_flat * target_flat
+ 
+		loss = 2 * (intersection.sum(1) + smooth) / (input_flat.sum(1) + target_flat.sum(1) + smooth)
+		loss = 1 - loss.sum() / N
+ 
+		return loss
+ 
+class MulticlassDiceLoss(nn.Module):
+	"""
+	requires one hot encoded target. Applies DiceLoss on each class iteratively.
+	requires input.shape[0:1] and target.shape[0:1] to be (N, C) where N is
+	  batch size and C is number of classes
+	"""
+	def __init__(self):
+		super(MulticlassDiceLoss, self).__init__()
+ 
+	def forward(self, input, target, weights=None):
+ 
+		C = target.shape[1]
+ 
+		# if weights is None:
+		# 	weights = torch.ones(C) #uniform weights for all classes
+ 
+		dice = DiceLoss()
+		totalLoss = 0
+ 
+		for i in range(C):
+			diceLoss = dice(input[:,i], target[:,i])
+			if weights is not None:
+				diceLoss *= weights[i]
+			totalLoss += diceLoss
+ 
+		return totalLoss / C
 
 class LayoutLMv2ForCellClassification(LayoutLMv2PreTrainedModel):
     def __init__(self, config):
@@ -904,19 +1012,23 @@ class LayoutLMv2ForCellClassification(LayoutLMv2PreTrainedModel):
         self.num_labels = config.num_labels
         self.layoutlmv2 = LayoutLMv2Model(config)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
+        self.use_lenemb = False
+        self.loss_func_type = "cos_loss"
+        self.mlp_dim = config.hidden_size
+        self.projection = nn.Sequential(
+            # nn.Linear(self.mlp_dim, self.mlp_dim),
+            # nn.ReLU(),
+            # nn.Dropout(config.hidden_dropout_prob),
+            nn.Linear(self.mlp_dim, config.num_labels),
+        )
         self.classifier = nn.Linear(config.hidden_size, config.num_labels)
         self.loss_fct = CrossEntropyLoss()
-        # self.loss_fct = BCEWithLogitsLoss()
-        # self.extractor = CellDecoder(config)
-        # self.ffnn_entity = nn.Sequential(
-        #     nn.Linear(config.hidden_size * 1, config.hidden_size),
-        #     nn.ReLU(),
-        #     nn.Dropout(config.hidden_dropout_prob),
-        #     nn.Linear(config.hidden_size, config.hidden_size // 2),
-        #     nn.ReLU(),
-        #     nn.Dropout(config.hidden_dropout_prob),
-        # )
+        self.facal_loss = FocalLoss(class_num=config.num_labels)
+        self.dice_loss = MulticlassDiceLoss()
+        self.len_embedding = nn.Embedding(250, config.hidden_size, scale_grad_by_freq=True)
         self.init_weights()
+        print(f"--------------use_lenemb:{self.use_lenemb}--------------")
+        print(f"--------------use_loss:{self.loss_func_type}--------------")
 
     def get_input_embeddings(self):
         return self.layoutlmv2.embeddings.word_embeddings
@@ -959,24 +1071,41 @@ class LayoutLMv2ForCellClassification(LayoutLMv2PreTrainedModel):
         loss = 0
         all_logits = []
         batch_size, max_n_words, context_dim = sequence_output.size()
+
+
         for b in range(batch_size):
             if len(entities[b]["start"]) == 0:
                 continue
             entities_start_index = torch.tensor(entities[b]["start"],device=device).type(torch.long)
             entities_end_index = torch.tensor(entities[b]["end"], device=device).type(torch.long)
+            entities_len = entities_end_index - entities_start_index
             entity_repr = None
+
             for i in enumerate(entities_start_index):
                 index = i[0]
                 start_index, end_index = entities_start_index[index], entities_end_index[index]
                 temp_repr = sequence_output[b][start_index:end_index].mean(dim=0).view(1,context_dim)
                 # temp_repr = sequence_output[b][start_index:end_index].max(dim=0)[0].view(1,context_dim)
-                entity_repr = temp_repr if entity_repr == None else torch.cat([entity_repr,temp_repr],dim=0)
+                entity_repr = temp_repr if entity_repr == None else torch.cat([entity_repr,temp_repr],dim=0) 
                 
             entities_labels = torch.tensor(entities[b]["label"],device=device).type(torch.long)
-            # entity_repr = torch.tensor(sequence_output[b][entities_start_index],device=device)
-            # entity = self.ffnn_entity(entity_repr)
-            logits = self.classifier(entity_repr)
-            loss += self.loss_fct(logits, entities_labels)
+            
+            if self.use_lenemb:
+                entities_len = self.len_embedding(entities_len)
+                final_entity_repr = entity_repr + entities_len
+                # final_entity_repr = torch.cat((entity_repr,entities_len),dim=-1)
+            else:
+                final_entity_repr = entity_repr
+            
+            logits = self.projection(final_entity_repr)
+            # logits = self.classifier(final_entity_repr)
+            
+            if self.loss_func_type == "facal_loss":
+                loss += self.facal_loss(logits, entities_labels)
+            elif self.loss_func_type == "dice_loss":
+                loss += self.dice_loss(logits,entities_labels)
+            else:
+                loss += self.loss_fct(logits, entities_labels)
             all_logits.append(logits)
 
 
@@ -1050,10 +1179,21 @@ class LayoutLMv2ForJointCellClassification(LayoutLMv2PreTrainedModel):
         self.extractor = CellDecoder(config)
         self.softmax = torch.nn.Softmax(dim=-1)
         self.loss_fct = CrossEntropyLoss()
+        self.adaptive_loss = True
+        self.multi_task = False
+        self.log_var_ner = torch.nn.Parameter(torch.zeros((1,), requires_grad=True))
         self.init_weights()
+        print(f"{self.__class__}:adaptive_loss:{self.adaptive_loss}\tmulti_task:{self.multi_task}")
 
     def get_input_embeddings(self):
         return self.layoutlmv2.embeddings.word_embeddings
+
+    def criterion(self, y_pred, y_true, log_vars,device):
+        precision = torch.exp(-log_vars)
+        diff = self.loss_fct(y_pred,y_true)
+        loss = torch.sum(precision * diff + log_vars, -1)
+        return loss
+
 
     def forward(
         self,
@@ -1095,6 +1235,8 @@ class LayoutLMv2ForJointCellClassification(LayoutLMv2PreTrainedModel):
         all_logits = []
         batch_size, max_n_words, context_dim = sequence_output.size()
         pred_entities = copy.deepcopy(entities)
+        # std_1, std_2= torch.exp(self.log_var_a)**0.5, torch.exp(self.log_var_b)**0.5
+
         for b in range(batch_size):
             if len(entities[b]["start"]) == 0:
                 continue
@@ -1116,12 +1258,16 @@ class LayoutLMv2ForJointCellClassification(LayoutLMv2PreTrainedModel):
             # logits = self.softmax(logits)
             pred_entities[b]["label"] = logits.argmax(dim=-1).tolist()
             # pred_entities[b]["label_logits"] = self.softmax(logits)
-            ner_loss += self.loss_fct(logits, entities_labels)
+            if self.adaptive_loss:
+                ner_loss += self.criterion(logits,entities_labels,self.log_var_ner, device)
+            else:
+                ner_loss += self.loss_fct(logits, entities_labels)
             all_logits.append(logits)
 
         re_loss, pred_relations = self.extractor(sequence_output, pred_entities, entities, relations)
         gamma = 0.33
         loss = ner_loss + re_loss
+        # loss = re_loss
         # loss = gamma * ner_loss + (1 - gamma) * re_loss
         return ReOutput(
             loss=loss,

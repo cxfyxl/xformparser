@@ -72,6 +72,8 @@ class XFUN(datasets.GeneratorBasedBuilder):
                             "end": datasets.Value("int64"),
                             "label": datasets.ClassLabel(names=["HEADER", "QUESTION", "ANSWER", "SINGLE", "ANSWERNUM"]),
                             "id":datasets.Value(dtype='string'),
+                            "group_id":datasets.Value("int64"),
+                            "index_id":datasets.Value("int64"),
                             # "pred_label": datasets.ClassLabel(names=["HEADER", "QUESTION", "ANSWER", "SINGLE", "ANSWERNUM"]),
                         }
                     ),
@@ -322,6 +324,7 @@ class XFUN(datasets.GeneratorBasedBuilder):
             entity_id_to_index_map = {}
             entities = []
             relations = []
+            group_id = 0
             while i < len(group_doc_src):
                 group_len, group_entities, group_doc = group_doc_src[i]
 
@@ -336,14 +339,18 @@ class XFUN(datasets.GeneratorBasedBuilder):
                         group_entity["end"] = group_entity["end"] + pre
                         entity_id_to_index_map[group_entity["id"]] = pre_index + n
                         group_entity["id"] = pre_index + n
+                        group_entity["group_id"] = group_id
+                        group_entity["index_id"] = n
                         relations.extend([tuple(sorted(l)) for l in group_entity["linking"]])
                     
+                    group_id +=1
                     entities.extend(group_entities)
                     group_doc_src.pop(i)
                     i-=1
 
                 else:
                     # print("what!")
+                    group_id = 0
                     break
                 i+=1
             entity_id_to_index_map_src.append(entity_id_to_index_map)

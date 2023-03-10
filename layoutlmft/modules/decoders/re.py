@@ -56,7 +56,9 @@ class REDecoder(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.entity_emb = nn.Embedding(5, config.hidden_size, scale_grad_by_freq=True)
-        self.mlp_dim = config.hidden_size * 2
+        self.group_emb = nn.Embedding(50, config.hidden_size // 4, scale_grad_by_freq=True)
+        self.index_emb= nn.Embedding(50, config.hidden_size // 4, scale_grad_by_freq=True)
+        self.mlp_dim = config.hidden_size * 2  + config.hidden_size // 2
         projection = nn.Sequential(
             nn.Linear(self.mlp_dim, self.mlp_dim // 2),
             nn.ReLU(),
@@ -75,14 +77,14 @@ class REDecoder(nn.Module):
         new_relations = []
         for b in range(batch_size):
             if len(entities[b]["start"]) <= 2:
-                entities[b] = {"end": [1, 1], "label": [0, 0], "start": [0, 0]}
+                entities[b] = {"end": [1, 1], "label": [0, 0], "start": [0, 0],"group_id":[0, 0],"index_id":[0, 0]}
             all_possible_relations = set(
                 [
                     (i, j)
                     for i in range(len(entities[b]["label"]))
                     for j in range(len(entities[b]["label"]))
-                    if i != j
-                    # if entities[b]["label"][i] == 1 and (entities[b]["label"][j] == 2 or entities[b]["label"][j] == 4)
+                    # if i != j
+                    if entities[b]["label"][i] == 1 and (entities[b]["label"][j] == 2 or entities[b]["label"][j] == 4)
                 ]
             )
             if len(all_possible_relations) == 0:
@@ -118,12 +120,14 @@ class REDecoder(nn.Module):
             pred_relations.append(rel)
         return pred_relations
 
-    def entity_cell_forward(self, hidden_states, b, entities_start_index, entities_end_index, entities_labels ,head_entities):
+    def entity_cell_forward(self, hidden_states, b, entities_start_index, entities_end_index, entities_labels,head_entities, \
+                            entities_group_index,entities_index_index):
         batch_size, max_n_words, context_dim = hidden_states.size()
         head_start_index = entities_start_index[head_entities]
         head_end_index = entities_end_index[head_entities]
         head_label = entities_labels[head_entities]
-        
+        head_group_id = entities_group_index[head_entities]
+        head_index_id = entities_index_index[head_entities]
         # if entities_labels_logits != None:
         #     head_logits = entities_labels_logits[head_entities]
         head_entity_repr = None
@@ -133,7 +137,7 @@ class REDecoder(nn.Module):
             temp_repr = hidden_states[b][start_index:end_index].mean(dim=0).view(1,context_dim)
             # temp_repr = hidden_states[b][start_index:end_index].max(dim=0)[0].view(1,context_dim)
             head_entity_repr = temp_repr if head_entity_repr == None else torch.cat([head_entity_repr,temp_repr], dim=0)
-        return head_label, head_entity_repr
+        return head_group_id, head_index_id, head_label, head_entity_repr
 
     def forward(self, hidden_states,  entities, relations):
         batch_size, max_n_words, context_dim = hidden_states.size()
@@ -147,7 +151,8 @@ class REDecoder(nn.Module):
             relation_labels = torch.tensor(relations[b]["label"], device=device)
             entities_start_index = torch.tensor(entities[b]["start"], device=device)
             entities_end_index = torch.tensor(entities[b]["end"], device=device)
-
+            entities_group_index = torch.tensor(entities[b]["group_id"], device=device)
+            entities_index_index = torch.tensor(entities[b]["index_id"], device=device)
             # if "pred_label" in entities[b].keys():
             #     entities_labels = torch.tensor(entities[b]["pred_label"], device=device)
             #     # entities_labels = torch.tensor(entities[b]["label"], device=device)
@@ -158,20 +163,33 @@ class REDecoder(nn.Module):
             # if "label_logits" in entities[b].keys():
             #     entities_labels_logits = torch.tensor(entities[b]["label_logits"], device=device)
 
-            head_label, head_entity_repr = self.entity_cell_forward(hidden_states, b, entities_start_index, \
-                                                   entities_end_index, entities_labels , head_entities)
+            head_group_id, head_index_id, head_label, head_entity_repr = self.entity_cell_forward(hidden_states, b, entities_start_index, \
+                                                   entities_end_index, entities_labels , head_entities,entities_group_index,entities_index_index)
 
-            tail_label, tail_entity_repr = self.entity_cell_forward(hidden_states, b, entities_start_index, \
-                                        entities_end_index, entities_labels , tail_entities)
+            tail_group_id, tail_index_id, tail_label, tail_entity_repr = self.entity_cell_forward(hidden_states, b, entities_start_index, \
+                                        entities_end_index, entities_labels , tail_entities,entities_group_index,entities_index_index)
             head_label_repr = self.entity_emb(head_label)
             tail_label_repr = self.entity_emb(tail_label)
+            head_group_repr,head_index_repr = self.group_emb(head_group_id), self.index_emb(head_index_id)
+            tail_group_repr,tail_index_repr = self.group_emb(tail_group_id), self.index_emb(tail_index_id)
             # head_repr, tail_repr = head_entity_repr, tail_entity_repr
+            # head_repr = head_entity_repr + head_label_repr
+            # tail_repr = tail_entity_repr + tail_label_repr
+
+            # head_repr = torch.cat(
+            #     (head_entity_repr, head_label_repr),
+            #     dim=-1,
+            # )
+            # tail_repr = torch.cat(
+            #     (tail_entity_repr, tail_label_repr),
+            #     dim=-1,
+            # )
             head_repr = torch.cat(
-                (head_entity_repr, head_label_repr),
+                (head_entity_repr, head_label_repr,head_group_repr,head_index_repr),
                 dim=-1,
             )
             tail_repr = torch.cat(
-                (tail_entity_repr, tail_label_repr),
+                (tail_entity_repr, tail_label_repr,tail_group_repr,tail_index_repr),
                 dim=-1,
             )
             heads = self.ffnn_head(head_repr)
@@ -194,6 +212,8 @@ class CellDecoder(nn.Module):
         super().__init__()
         self.log_var_re = torch.nn.Parameter(torch.zeros((1,), requires_grad=True))
         self.entity_emb = nn.Embedding(5, config.hidden_size, scale_grad_by_freq=True)
+        self.group_emb = nn.Embedding(50, config.hidden_size // 4, scale_grad_by_freq=True)
+        self.index_emb= nn.Embedding(50, config.hidden_size // 4, scale_grad_by_freq=True)
         # self.entity_emb_rand = nn.Embedding(5, config.hidden_size, scale_grad_by_freq=True)
         self.mlp_dim = config.hidden_size * 2
         projection = nn.Sequential(
@@ -204,7 +224,7 @@ class CellDecoder(nn.Module):
             nn.ReLU(),
             nn.Dropout(config.hidden_dropout_prob),
         )
-        self.adaptive_loss = True
+        self.adaptive_loss = False
         self.multi_task = False
         
         self.ffnn_head = copy.deepcopy(projection)
@@ -325,6 +345,8 @@ class CellDecoder(nn.Module):
             
             # head_repr = head_entity_repr
             # tail_repr = tail_entity_repr
+            # head_repr = head_entity_repr + head_label_repr
+            # tail_repr = tail_entity_repr + tail_label_repr
             head_repr = torch.cat(
                 (head_entity_repr, head_label_repr),
                 dim=-1,

@@ -38,7 +38,7 @@ class XFUNConfig(datasets.BuilderConfig):
 class XFUN(datasets.GeneratorBasedBuilder):
     """XFUN dataset."""
 
-    BUILDER_CONFIGS = [XFUNConfig(name=f"myxfunsplit_new.{lang}", lang=lang) for lang in _LANG]
+    BUILDER_CONFIGS = [XFUNConfig(name=f"myxfuninfer.{lang}", lang=lang) for lang in _LANG]
     ocr_data = {}
     input_ocr = ["/home/zhanghang-s21/data/bishe/ocr_data/aistrong_ocr_train", \
                 "/home/zhanghang-s21/data/bishe/ocr_data/aistrong_ocr_mytrain", \
@@ -72,6 +72,8 @@ class XFUN(datasets.GeneratorBasedBuilder):
                             "end": datasets.Value("int64"),
                             "label": datasets.ClassLabel(names=["HEADER", "QUESTION", "ANSWER", "SINGLE", "ANSWERNUM"]),
                             "id":datasets.Value(dtype='string'),
+                            "group_id":datasets.Value("int64"),
+                            "index_id":datasets.Value("int64"),
                             # "pred_label": datasets.ClassLabel(names=["HEADER", "QUESTION", "ANSWER", "SINGLE", "ANSWERNUM"]),
                         }
                     ),
@@ -96,9 +98,9 @@ class XFUN(datasets.GeneratorBasedBuilder):
             # "train": [f"{_URL}{self.config.lang}_train.align.json", f"{_URL}{self.config.lang}.train.zip"],
             # "val": [f"{_URL}{self.config.lang}_val.align.json", f"{_URL}{self.config.lang}.val.zip"],
             # /home/zhanghang-s21/data/bishe/MYXFUND/mytrain.align.json
-            "train": [f"{_URL}mytrain.align.json", f"{_URL}mytrain.zip"],
-            "val": [f"{_URL}myval.new.align.json", f"{_URL}myval.zip"],
-            "test": [f"{_URL}mytest.new.align.json", f"{_URL}mytest.zip"],
+            # "train": [f"{_URL}mytrain.align.json", f"{_URL}mytrain.zip"],
+            "val": [f"{_URL}myval.new.align.ner.json", f"{_URL}myval.zip"],
+            "test": [f"{_URL}mytest.new.align.ner.json", f"{_URL}mytest.zip"],
             # "val": [f"{_URL}myval.align.ner.json", f"{_URL}myval.zip"],
         
             # "val": [f"{_URL}myval.ner.json", f"{_URL}myval.zip"],
@@ -109,24 +111,24 @@ class XFUN(datasets.GeneratorBasedBuilder):
             # "test": [f"{_MYURL}mytrain.json", f"{_MYURL}mytrain.zip"],
         }
         downloaded_files = dl_manager.download_and_extract(urls_to_download)
-        train_files_for_many_langs = [downloaded_files["train"]]
+        # train_files_for_many_langs = [downloaded_files["train"]]
         val_files_for_many_langs = [downloaded_files["val"]]
         test_files_for_many_langs = [downloaded_files["test"]]
-        if self.config.additional_langs:
-            additional_langs = self.config.additional_langs.split("+")
-            if "all" in additional_langs:
-                additional_langs = [lang for lang in _LANG if lang != self.config.lang]
-            for lang in additional_langs:
-                urls_to_download = {"train": [f"{_URL}{lang}.train.json", f"{_URL}{lang}.train.zip"]}
-                additional_downloaded_files = dl_manager.download_and_extract(urls_to_download)
-                train_files_for_many_langs.append(additional_downloaded_files["train"])
+        # if self.config.additional_langs:
+        #     additional_langs = self.config.additional_langs.split("+")
+        #     if "all" in additional_langs:
+        #         additional_langs = [lang for lang in _LANG if lang != self.config.lang]
+        #     for lang in additional_langs:
+        #         urls_to_download = {"train": [f"{_URL}{lang}.train.json", f"{_URL}{lang}.train.zip"]}
+        #         additional_downloaded_files = dl_manager.download_and_extract(urls_to_download)
+        #         train_files_for_many_langs.append(additional_downloaded_files["train"])
 
         logger.info(f"Training on {self.config.lang} with additional langs({self.config.additional_langs})")
         logger.info(f"Evaluating on {self.config.lang}")
         logger.info(f"Testing on {self.config.lang}")
         return [
-            datasets.SplitGenerator(name=datasets.Split.TRAIN, gen_kwargs={"filepaths": train_files_for_many_langs, \
-                "MODE":"train"}),
+            # datasets.SplitGenerator(name=datasets.Split.TRAIN, gen_kwargs={"filepaths": train_files_for_many_langs, \
+            #     "MODE":"train"}),
             datasets.SplitGenerator(
                 name=datasets.Split.VALIDATION, gen_kwargs={"filepaths": val_files_for_many_langs, \
                     "MODE":"val"}
@@ -322,6 +324,7 @@ class XFUN(datasets.GeneratorBasedBuilder):
             entity_id_to_index_map = {}
             entities = []
             relations = []
+            group_id = 0
             while i < len(group_doc_src):
                 group_len, group_entities, group_doc = group_doc_src[i]
 
@@ -336,14 +339,18 @@ class XFUN(datasets.GeneratorBasedBuilder):
                         group_entity["end"] = group_entity["end"] + pre
                         entity_id_to_index_map[group_entity["id"]] = pre_index + n
                         group_entity["id"] = pre_index + n
+                        group_entity["group_id"] = group_id
+                        group_entity["index_id"] = n
                         relations.extend([tuple(sorted(l)) for l in group_entity["linking"]])
                     
+                    group_id +=1
                     entities.extend(group_entities)
                     group_doc_src.pop(i)
                     i-=1
 
                 else:
                     # print("what!")
+                    group_id = 0
                     break
                 i+=1
             entity_id_to_index_map_src.append(entity_id_to_index_map)

@@ -16,6 +16,7 @@ from layoutlmft.data.data_collator import DataCollatorForKeyValueExtraction
 from layoutlmft.evaluation import re_score
 from layoutlmft.models.model_args import ModelArguments
 from layoutlmft.trainers import XfunReTrainer
+from transformers import EarlyStoppingCallback
 from transformers import (
     AutoConfig,
     AutoTokenizer,
@@ -225,6 +226,7 @@ def main():
         tokenizer=tokenizer,
         data_collator=data_collator,
         compute_metrics=compute_metrics,
+        # callbacks=[EarlyStoppingCallback(3, 0.0)]
     )
     trainer.test_dataset = test_dataset
 

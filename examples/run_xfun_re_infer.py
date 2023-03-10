@@ -95,8 +95,8 @@ def main():
     #     keep_in_memory=True,
     # )
     datasets = load_dataset(
-        '/home/zhanghang-s21/data/layoutlmft/layoutlmft/data/datasets/myxfunsplit_new.py',
-        "myxfunsplit_new.zh",
+        '/home/zhanghang-s21/data/layoutlmft/layoutlmft/data/datasets/myxfuninfer.py',
+        "myxfuninfer.zh",
         additional_langs=data_args.additional_langs,
         keep_in_memory=True,
     )
@@ -197,6 +197,9 @@ def main():
     if training_args.do_predict:
         if "test" not in datasets:
             raise ValueError("--do_predict requires a test dataset")       
+        # eval_dataset = datasets["validation"]
+        # if data_args.max_val_samples is not None:
+        #     eval_dataset = eval_dataset.select(range(data_args.max_val_samples))
         test_dataset = datasets["test"]
         if data_args.max_test_samples is not None:
             print("begin predict")

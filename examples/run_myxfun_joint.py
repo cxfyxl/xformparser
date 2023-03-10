@@ -196,7 +196,7 @@ def main():
     if training_args.do_eval:
         if "validation" not in datasets:
             raise ValueError("--do_eval requires a validation dataset")
-        eval_dataset = datasets["validation"].sort("len",reverse=False)
+        eval_dataset = datasets["validation"]# .sort("len",reverse=False)
         # eval_dataset = eval_dataset
         if data_args.max_val_samples is not None:
             eval_dataset = eval_dataset.select(range(data_args.max_val_samples))
@@ -236,11 +236,11 @@ def main():
     )
     trainer.test_dataset = test_dataset
     # trainer.    
-    # trainer.create_optimizer_and_scheduler(trainer.args.max_steps)
+    trainer.create_optimizer_and_scheduler(trainer.args.max_steps)
     
-    # trainer.optimizer =  AdamW([{"params":model.classifier.parameters(),"lr":1e-5},
-    #                 {"params":model.layoutlmv2.parameters()},
-    #                 {"params":model.extractor.parameters()}],lr=5e-5)
+    trainer.optimizer =  AdamW([{"params":model.classifier.parameters(),"lr":0.5e-5},
+                    {"params":model.layoutlmv2.parameters()},
+                    {"params":model.extractor.parameters()}],lr=5e-5)
 
     # Training
     if training_args.do_train:

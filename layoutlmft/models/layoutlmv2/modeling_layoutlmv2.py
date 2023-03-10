@@ -1179,7 +1179,7 @@ class LayoutLMv2ForJointCellClassification(LayoutLMv2PreTrainedModel):
         self.extractor = CellDecoder(config)
         self.softmax = torch.nn.Softmax(dim=-1)
         self.loss_fct = CrossEntropyLoss()
-        self.adaptive_loss = True
+        self.adaptive_loss = False
         self.multi_task = False
         self.log_var_ner = torch.nn.Parameter(torch.zeros((1,), requires_grad=True))
         self.init_weights()

@@ -175,9 +175,13 @@ def main():
             eval_dataset = eval_dataset.select(range(data_args.max_val_samples))
 
     if training_args.do_predict:
-        # if "test" not in datasets:
-        #     raise ValueError("--do_predict requires a test dataset")
+        if "test" not in datasets:
+            raise ValueError("--do_predict requires a test dataset")
         test_dataset = datasets[test_name]
+        if train_dataset == None:
+            train_dataset = datasets["train"]
+        if eval_dataset == None:
+            eval_dataset = datasets["validation"]
         if data_args.max_test_samples is not None:
             test_dataset = test_dataset.select(range(data_args.max_test_samples))
 
@@ -267,6 +271,9 @@ def main():
         trainer.log_metrics("eval", metrics)
         trainer.save_metrics("eval", metrics)
 
+
+
+
     # Predict
     if training_args.do_predict:
         logger.info("*** Predict ***")
@@ -283,7 +290,11 @@ def main():
         trainer.log_metrics("test", metrics)
         trainer.save_metrics("test", metrics)
 
-        # Save predictions
+        predictions, labels, metrics = trainer.predict(train_dataset)
+
+        trainer.log_metrics("train", metrics)
+        trainer.save_metrics("train", metrics)
+
         output_test_predictions_file = os.path.join(training_args.output_dir, test_name + "_data_test_predictions_mytrain.txt")
         if trainer.is_world_process_zero():
             with open(output_test_predictions_file, "w") as writer:

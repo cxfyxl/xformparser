@@ -40,7 +40,7 @@ check_min_version("4.5.0")
 
 logger = logging.getLogger(__name__)
 
-os.environ["WANDB_PROJECT"] = "my-testdata-re"
+os.environ["WANDB_PROJECT"] = "my-testdata-ner"
 
 # save your trained model checkpoint to wandb
 os.environ["WANDB_LOG_MODEL"]="true"
@@ -194,6 +194,12 @@ def main():
         test_dataset = datasets["test"]
         if data_args.max_test_samples is not None:
             test_dataset = test_dataset.select(range(data_args.max_test_samples))
+        train_dataset = datasets["train"]
+        if data_args.max_train_samples is not None:
+            train_dataset = train_dataset.select(range(data_args.max_train_samples))
+        eval_dataset = datasets["validation"]
+        if data_args.max_val_samples is not None:
+            eval_dataset = eval_dataset.select(range(data_args.max_val_samples))
 
     # Data collator
     data_collator = DataCollatorForKeyValueExtraction(
@@ -255,16 +261,6 @@ def main():
             }
         # return results
  
-    # Initialize our Trainer
-    # trainer = XfunSerTrainer(
-    #     model=model,
-    #     args=training_args,
-    #     train_dataset=train_dataset if training_args.do_train else None,
-    #     eval_dataset=eval_dataset if training_args.do_eval else None,
-    #     tokenizer=tokenizer,
-    #     data_collator=data_collator,
-    #     compute_metrics=compute_metrics,
-    # )
     from transformers import AdamW
     
     # optimizer = AdamW([{"params":model.classifier.parameters(),"lr":1e-5},
@@ -281,6 +277,7 @@ def main():
         tokenizer=tokenizer,
         data_collator=data_collator,
         compute_metrics=compute_metrics,
+        callbacks=[EarlyStoppingCallback(3, 0.0)]
     )
     trainer.test_dataset = test_dataset
     # trainer.create_optimizer_and_scheduler(trainer.args.max_steps)
@@ -312,20 +309,20 @@ def main():
         
         trainer.log_metrics("eval", metrics)
         trainer.save_metrics("eval", metrics)
-        # logger.info("*** test ***")
-        # metrics = trainer.evaluate(test_dataset)
-        # trainer.log_metrics("test", metrics)
-        # trainer.save_metrics("test", metrics)
+        # logger.info("*** test train***")
+        # metrics = trainer.evaluate(train_dataset)
+        # trainer.log_metrics("train", metrics)
+        # trainer.save_metrics("train", metrics)
 
     # Predict
     if training_args.do_predict:
         logger.info("*** Predict ***")
 
         predictions, labels, metrics = trainer.predict(test_dataset)
+        new_predictions = []
         for prediction in predictions:
-            prediction = prediction.cpu()
-            prediction = np.argmax(prediction, axis=-1).int()
-            prediction = prediction.int().numpy().tolist()
+            new_predictions.append(np.argmax(prediction.cpu(), axis=-1).int().tolist())
+            # prediction = 
 
 
         # Remove ignored index (special tokens)
@@ -333,12 +330,35 @@ def main():
         trainer.log_metrics("test", metrics)
         trainer.save_metrics("test", metrics)
 
+        # predictions, labels, metrics = trainer.predict(train_dataset)
+        # trainer.log_metrics("train", metrics)
+        # trainer.save_metrics("train", metrics)
         # Save predictions
-        # output_test_predictions_file = os.path.join(training_args.output_dir, test_name + "_data_test_predictions2.txt")
-        # if trainer.is_world_process_zero():
-        #     with open(output_test_predictions_file, "w") as writer:
-        #         for prediction in predictions:
-        #             writer.write(" ".join(prediction) + "\n")
+        output_test_predictions_file = os.path.join(training_args.output_dir, test_name + "_data_test_predictions.txt")
+        if trainer.is_world_process_zero():
+            with open(output_test_predictions_file, "w") as writer:
+                for prediction in new_predictions:
+                    writer.write(" ".join(str(v) for v in prediction) + "\n")
+
+
+        logger.info("*** val ***")
+
+        predictions, labels, metrics = trainer.predict(eval_dataset)
+        new_predictions = []
+        for prediction in predictions:
+            new_predictions.append(np.argmax(prediction.cpu(), axis=-1).int().tolist())
+            # prediction = 
+
+
+        # Remove ignored index (special tokens)
+
+        trainer.log_metrics("eval", metrics)
+        trainer.save_metrics("eval", metrics)
+        output_test_predictions_file = os.path.join(training_args.output_dir, test_name + "_data_val_predictions.txt")
+        if trainer.is_world_process_zero():
+            with open(output_test_predictions_file, "w") as writer:
+                for prediction in new_predictions:
+                    writer.write(" ".join(str(v) for v in prediction) + "\n")
 
 
 def _mp_fn(index):

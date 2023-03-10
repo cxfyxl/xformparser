@@ -58,7 +58,7 @@ class REDecoder(nn.Module):
         self.entity_emb = nn.Embedding(5, config.hidden_size, scale_grad_by_freq=True)
         self.group_emb = nn.Embedding(50, config.hidden_size // 4, scale_grad_by_freq=True)
         self.index_emb= nn.Embedding(50, config.hidden_size // 4, scale_grad_by_freq=True)
-        self.mlp_dim = config.hidden_size * 2  + config.hidden_size // 2
+        self.mlp_dim = config.hidden_size * 2  # + config.hidden_size // 2
         projection = nn.Sequential(
             nn.Linear(self.mlp_dim, self.mlp_dim // 2),
             nn.ReLU(),
@@ -176,22 +176,22 @@ class REDecoder(nn.Module):
             # head_repr = head_entity_repr + head_label_repr
             # tail_repr = tail_entity_repr + tail_label_repr
 
-            # head_repr = torch.cat(
-            #     (head_entity_repr, head_label_repr),
-            #     dim=-1,
-            # )
-            # tail_repr = torch.cat(
-            #     (tail_entity_repr, tail_label_repr),
-            #     dim=-1,
-            # )
             head_repr = torch.cat(
-                (head_entity_repr, head_label_repr,head_group_repr,head_index_repr),
+                (head_entity_repr, head_label_repr),
                 dim=-1,
             )
             tail_repr = torch.cat(
-                (tail_entity_repr, tail_label_repr,tail_group_repr,tail_index_repr),
+                (tail_entity_repr, tail_label_repr),
                 dim=-1,
             )
+            # head_repr = torch.cat(
+            #     (head_entity_repr, head_label_repr,head_group_repr,head_index_repr),
+            #     dim=-1,
+            # )
+            # tail_repr = torch.cat(
+            #     (tail_entity_repr, tail_label_repr,tail_group_repr,tail_index_repr),
+            #     dim=-1,
+            # )
             heads = self.ffnn_head(head_repr)
             tails = self.ffnn_tail(tail_repr)
             logits = self.rel_classifier(heads, tails)

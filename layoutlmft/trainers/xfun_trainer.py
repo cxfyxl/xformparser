@@ -381,8 +381,11 @@ class XfunReTrainer(FunsdTrainer):
         if self.control.should_evaluate:
             metrics = self.evaluate()
             self._report_to_hp_search(trial, epoch, metrics)
-            predictions, labels, metrics = self.predict(self.test_dataset)
-            self._report_to_hp_search(trial, epoch, metrics)
+            predictions, labels, test_metrics = self.predict(self.test_dataset)
+            self._report_to_hp_search(trial, epoch, test_metrics)
+        if self.control.should_save:
+            self._save_checkpoint(model, trial, metrics=metrics)
+            self.control = self.callback_handler.on_save(self.args, self.state, self.control)
 
 
     
@@ -832,5 +835,8 @@ class XfunJointTrainer(FunsdTrainer):
         if self.control.should_evaluate:
             metrics = self.evaluate()
             self._report_to_hp_search(trial, epoch, metrics)
-            predictions, labels, metrics = self.predict(self.test_dataset)
-            self._report_to_hp_search(trial, epoch, metrics)
+            predictions, labels, test_metrics = self.predict(self.test_dataset)
+            self._report_to_hp_search(trial, epoch, test_metrics)
+        if self.control.should_save:
+            self._save_checkpoint(model, trial, metrics=metrics)
+            self.control = self.callback_handler.on_save(self.args, self.state, self.control)

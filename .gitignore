@@ -15,3 +15,5 @@ mytmp_pub
 mytmp2
 xfund
 *.pyc
+layoutlmft/__pycache__
+layoutlmft/data/__pycache__

@@ -4,6 +4,23 @@ from detectron2.data.detection_utils import read_image
 from detectron2.data.transforms import ResizeTransform, TransformList
 from PIL import Image
 import os
+def overlapping_rectangles(rect1, rect2):
+    """
+    判断两个矩形是否有重叠，如果有，返回重叠的面积。
+    :param rect1: 第一个矩形的四个顶点坐标，格式为[x1, y1, x2, y2]，其中(x1, y1)为左下角坐标，(x2, y2)为右上角坐标。
+    :param rect2: 第二个矩形的四个顶点坐标，格式为[x1, y1, x2, y2]，其中(x1, y1)为左下角坐标，(x2, y2)为右上角坐标。
+    :return: 如果两个矩形有重叠，返回重叠的面积，否则返回0。
+    """
+    # 检查两个矩形是否有重叠
+    if (rect1[0] > rect2[2]) or (rect1[2] < rect2[0]) or (rect1[1] > rect2[3]) or (rect1[3] < rect2[1]):
+        return 0
+    
+    # 计算重叠的面积
+    x_overlap = min(rect1[2], rect2[2]) - max(rect1[0], rect2[0])
+    y_overlap = min(rect1[3], rect2[3]) - max(rect1[1], rect2[1])
+    overlap_area = x_overlap * y_overlap
+    
+    return overlap_area/((rect2[3]-rect2[1])*(rect2[2]-rect2[0]))*100
 
 def normalize_bbox(bbox, size):
     return [
@@ -57,13 +74,34 @@ def bbox_overlap(R1,R2):
     else:
         return False
 
-def compute_y(table_bbox,bbox):
-    if table_bbox[3] <= bbox[1] or table_bbox[1] >= bbox[3]:
+def overlap(x1, x2, y1, y2):
+    """
+    判断两条线段重叠度的函数
+    x1, x2: 第一条线段的端点
+    y1, y2: 第二条线段的端点
+    返回值: 如果两条线段重叠，则返回重叠长度；否则返回0
+    """
+    if x1 > x2:
+        x1, x2 = x2, x1
+    if y1 > y2:
+        y1, y2 = y2, y1
+    if x1 <= y1 <= x2:
+        if y2 <= x2:
+            return y2 - y1
+        else:
+            return x2 - y1
+    elif y1 <= x1 <= y2:
+        if x2 <= y2:
+            return x2 - x1
+        else:
+            return y2 - x1
+    else:
         return 0
-    elif table_bbox[1] < bbox[1]:
-        return (table_bbox[3]-bbox[1])/(table_bbox[3]-table_bbox[1])*100
-    elif table_bbox[1] >= bbox[1]:
-        return (bbox[3]-table_bbox[1])/(table_bbox[3]-table_bbox[1])*100
+
+def compute_y(table_bbox,bbox):
+    y1,y2,y3,y4=table_bbox[3],table_bbox[1],bbox[3],bbox[1]
+    return overlap(y1,y2,y3,y4)/(table_bbox[3]-table_bbox[1])*100
+
 
 
 def bboxinRect(textbbox,bbox):

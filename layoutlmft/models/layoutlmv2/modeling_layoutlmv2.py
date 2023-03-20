@@ -1155,7 +1155,7 @@ class LayoutLMv2ForRelationExtraction(LayoutLMv2PreTrainedModel):
         sequence_output, image_output = outputs[0][:, :seq_length], outputs[0][:, seq_length:]
         sequence_output = self.dropout(sequence_output)
         if torch.isnan(sequence_output).sum() != 0:
-            print("wrong")
+            print("loss wrong")
         loss, pred_relations = self.extractor(sequence_output, entities, relations)
 
         return ReOutput(

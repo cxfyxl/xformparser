@@ -58,7 +58,12 @@ class REDecoder(nn.Module):
         self.entity_emb = nn.Embedding(5, config.hidden_size, scale_grad_by_freq=True)
         self.group_emb = nn.Embedding(50, config.hidden_size // 4, scale_grad_by_freq=True)
         self.index_emb= nn.Embedding(50, config.hidden_size // 4, scale_grad_by_freq=True)
-        self.mlp_dim = config.hidden_size * 1  #  + config.hidden_size // 2
+        self.mlp_dim = config.hidden_size * 2   + config.hidden_size // 2
+        self.use_specialid = True
+        self.del_begin = -5
+        self.del_end = 50
+        # self.minend = -6
+        # self.maxend = 50
         projection = nn.Sequential(
             nn.Linear(self.mlp_dim, self.mlp_dim // 2),
             nn.ReLU(),
@@ -72,35 +77,56 @@ class REDecoder(nn.Module):
         self.rel_classifier = BiaffineAttention(self.mlp_dim // 4, 2)
         self.loss_fct = CrossEntropyLoss()
 
+    def build_seq(self,relations,entities,b,key):
+        all_possible_relations = set(
+            [
+                (i, j)
+                for i in range(len(entities[b][key]))
+                for j in range(len(entities[b][key]))
+                # if i != j
+                if entities[b][key][i] == 1 and (entities[b][key][j] == 2 or entities[b][key][j] == 4) # entities[b]["label"][j] == 2 or entities[b]["label"][j] == 4
+                # and (j - i) <= self.del_end
+                # and (j - i) >= self.del_begin
+            ]
+        )
+        positive_relations = set(list(zip(relations[b]["head"], relations[b]["tail"])))
+        if positive_relations.issubset(all_possible_relations):
+            pass
+        else:
+            # pass
+            print("wrong")
+        if self.training:
+            all_possible_relations = all_possible_relations | positive_relations
+        if len(all_possible_relations) == 0:
+            all_possible_relations = gt_possible_relations = set([(0, 1)])
+        
+        negative_relations = all_possible_relations - positive_relations
+        positive_relations = set([i for i in positive_relations if i in all_possible_relations])
+        reordered_relations = list(positive_relations) + list(negative_relations)
+        relation_per_doc = {"head": [], "tail": [], "label": []}
+        relation_per_doc["head"] = [i[0] for i in reordered_relations]
+        relation_per_doc["tail"] = [i[1] for i in reordered_relations]
+        relation_per_doc["label"] = [1] * len(positive_relations) + [0] * (
+                len(reordered_relations) - len(positive_relations)
+            )
+        assert len(relation_per_doc["head"]) != 0
+        return relation_per_doc
+    
+
     def build_relation(self, relations, entities):
         batch_size = len(relations)
         new_relations = []
+        gt_relations = []
         for b in range(batch_size):
             if len(entities[b]["start"]) <= 2:
                 entities[b] = {"end": [1, 1], "label": [0, 0], "start": [0, 0],"group_id":[0, 0],"index_id":[0, 0]}
-            all_possible_relations = set(
-                [
-                    (i, j)
-                    for i in range(len(entities[b]["label"]))
-                    for j in range(len(entities[b]["label"]))
-                    # if i != j
-                    if entities[b]["label"][i] == 1 and (entities[b]["label"][j] == 2 or entities[b]["label"][j] == 4)
-                ]
-            )
-            if len(all_possible_relations) == 0:
-                all_possible_relations = set([(0, 1)])
-            positive_relations = set(list(zip(relations[b]["head"], relations[b]["tail"])))
-            negative_relations = all_possible_relations - positive_relations
-            positive_relations = set([i for i in positive_relations if i in all_possible_relations])
-            reordered_relations = list(positive_relations) + list(negative_relations)
-            relation_per_doc = {"head": [], "tail": [], "label": []}
-            relation_per_doc["head"] = [i[0] for i in reordered_relations]
-            relation_per_doc["tail"] = [i[1] for i in reordered_relations]
-            relation_per_doc["label"] = [1] * len(positive_relations) + [0] * (
-                len(reordered_relations) - len(positive_relations)
-            )
-            assert len(relation_per_doc["head"]) != 0
+            if "pred_label" not in entities[b].keys():
+                relation_per_doc = self.build_seq(relations,entities,b,"label")
+            else:
+                relation_per_doc = self.build_seq(relations,entities,b,"pred_label")
+                # gt_relation_per_doc = self.build_seq(relations,entities,b,"label")
             new_relations.append(relation_per_doc)
+            # gt_relations.append(gt_relation_per_doc)
         return new_relations, entities
 
     def get_predicted_relations(self, logits, relations, entities):
@@ -117,6 +143,9 @@ class REDecoder(nn.Module):
             rel["tail"] = (entities["start"][rel["tail_id"]], entities["end"][rel["tail_id"]])
             rel["tail_type"] = entities["label"][rel["tail_id"]]
             rel["type"] = 1
+            if "pred_label" in entities.keys():
+                rel["head_pred_type"] = entities["pred_label"][rel["head_id"]]
+                rel["tail_pred_type"] = entities["pred_label"][rel["tail_id"]]
             pred_relations.append(rel)
         return pred_relations
 
@@ -153,11 +182,10 @@ class REDecoder(nn.Module):
             entities_end_index = torch.tensor(entities[b]["end"], device=device)
             entities_group_index = torch.tensor(entities[b]["group_id"], device=device)
             entities_index_index = torch.tensor(entities[b]["index_id"], device=device)
-            # if "pred_label" in entities[b].keys():
-            #     entities_labels = torch.tensor(entities[b]["pred_label"], device=device)
-            #     # entities_labels = torch.tensor(entities[b]["label"], device=device)
-            # else:
-            entities_labels = torch.tensor(entities[b]["label"], device=device)
+            if "pred_label" in entities[b].keys():
+                entities_labels = torch.tensor(entities[b]["pred_label"], device=device)
+            else:
+                entities_labels = torch.tensor(entities[b]["label"], device=device)
             entities_labels_logits = None
             
             # if "label_logits" in entities[b].keys():
@@ -170,28 +198,30 @@ class REDecoder(nn.Module):
                                         entities_end_index, entities_labels , tail_entities,entities_group_index,entities_index_index)
             head_label_repr = self.entity_emb(head_label)
             tail_label_repr = self.entity_emb(tail_label)
-            # head_group_repr,head_index_repr = self.group_emb(head_group_id), self.index_emb(head_index_id)
-            # tail_group_repr,tail_index_repr = self.group_emb(tail_group_id), self.index_emb(tail_index_id)
-            # head_repr, tail_repr = head_entity_repr, tail_entity_repr
-            head_repr = head_entity_repr
-            tail_repr = tail_entity_repr
 
-            # head_repr = torch.cat(
-            #     (head_entity_repr, head_label_repr),
-            #     dim=-1,
-            # )
-            # tail_repr = torch.cat(
-            #     (tail_entity_repr, tail_label_repr),
-            #     dim=-1,
-            # )
-            # head_repr = torch.cat(
-            #     (head_entity_repr, head_label_repr,head_group_repr,head_index_repr),
-            #     dim=-1,
-            # )
-            # tail_repr = torch.cat(
-            #     (tail_entity_repr, tail_label_repr,tail_group_repr,tail_index_repr),
-            #     dim=-1,
-            # )
+            # head_repr, tail_repr = head_entity_repr, tail_entity_repr
+            # head_repr = head_entity_repr
+            # tail_repr = tail_entity_repr
+            if not self.use_specialid:
+                head_repr = torch.cat(
+                    (head_entity_repr, head_label_repr),
+                    dim=-1,
+                )
+                tail_repr = torch.cat(
+                    (tail_entity_repr, tail_label_repr),
+                    dim=-1,
+                )
+            else:
+                head_group_repr,head_index_repr = self.group_emb(head_group_id), self.index_emb(head_index_id)
+                tail_group_repr,tail_index_repr = self.group_emb(tail_group_id), self.index_emb(tail_index_id)
+                head_repr = torch.cat(
+                    (head_entity_repr, head_label_repr,head_group_repr,head_index_repr),
+                    dim=-1,
+                )
+                tail_repr = torch.cat(
+                    (tail_entity_repr, tail_label_repr,tail_group_repr,tail_index_repr),
+                    dim=-1,
+                )
             heads = self.ffnn_head(head_repr)
             tails = self.ffnn_tail(tail_repr)
             logits = self.rel_classifier(heads, tails)
@@ -206,6 +236,7 @@ class REDecoder(nn.Module):
         return loss, all_pred_relations
     
     
+
     
 class CellDecoder(nn.Module):
     def __init__(self, config):
@@ -215,7 +246,7 @@ class CellDecoder(nn.Module):
         self.group_emb = nn.Embedding(50, config.hidden_size // 4, scale_grad_by_freq=True)
         self.index_emb= nn.Embedding(50, config.hidden_size // 4, scale_grad_by_freq=True)
         # self.entity_emb_rand = nn.Embedding(5, config.hidden_size, scale_grad_by_freq=True)
-        self.mlp_dim = config.hidden_size * 2 + config.hidden_size // 2
+        self.mlp_dim = config.hidden_size * 2 # + config.hidden_size // 2
         projection = nn.Sequential(
             nn.Linear(self.mlp_dim, self.mlp_dim // 2),
             nn.ReLU(),
@@ -249,7 +280,10 @@ class CellDecoder(nn.Module):
                     (i, j)
                     for i in range(len(entities[b]["label"]))
                     for j in range(len(entities[b]["label"]))
+                    if i != j
                     if entities[b]["label"][i] == 1 and (entities[b]["label"][j] == 2 or entities[b]["label"][j] == 4) # or entities[b]["label"][j] == 4 
+                    # and (entities[b]["id"][j] - entities[b]["id"][i] <= 50)
+                    # and (entities[b]["id"][j] - entities[b]["id"][i] >= -5)
                 ]
             )
             if len(all_possible_relations) == 0:
@@ -337,8 +371,8 @@ class CellDecoder(nn.Module):
                                         entities_end_index, entities_labels , tail_entities,entities_group_index,entities_index_index)
             head_label_repr = self.entity_emb(head_label)
             tail_label_repr = self.entity_emb(tail_label)
-            head_group_repr,head_index_repr = self.group_emb(head_group_id), self.index_emb(head_index_id)
-            tail_group_repr,tail_index_repr = self.group_emb(tail_group_id), self.index_emb(tail_index_id)
+            # head_group_repr,head_index_repr = self.group_emb(head_group_id), self.index_emb(head_index_id)
+            # tail_group_repr,tail_index_repr = self.group_emb(tail_group_id), self.index_emb(tail_index_id)
                 
             
             # if entities_labels_logits != None:
@@ -357,22 +391,22 @@ class CellDecoder(nn.Module):
             # tail_repr = tail_entity_repr + tail_label_repr
 
 
-            head_repr = torch.cat(
-                (head_entity_repr, head_label_repr,head_group_repr,head_index_repr),
-                dim=-1,
-            )
-            tail_repr = torch.cat(
-                (tail_entity_repr, tail_label_repr,tail_group_repr,tail_index_repr),
-                dim=-1,
-            )
             # head_repr = torch.cat(
-            #     (head_entity_repr, head_label_repr),
+            #     (head_entity_repr, head_label_repr,head_group_repr,head_index_repr),
             #     dim=-1,
             # )
             # tail_repr = torch.cat(
-            #     (tail_entity_repr, tail_label_repr),
+            #     (tail_entity_repr, tail_label_repr,tail_group_repr,tail_index_repr),
             #     dim=-1,
             # )
+            head_repr = torch.cat(
+                (head_entity_repr, head_label_repr),
+                dim=-1,
+            )
+            tail_repr = torch.cat(
+                (tail_entity_repr, tail_label_repr),
+                dim=-1,
+            )
             heads = self.ffnn_head(head_repr)
             tails = self.ffnn_tail(tail_repr)
             logits = self.rel_classifier(heads, tails)

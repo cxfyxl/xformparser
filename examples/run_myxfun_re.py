@@ -101,7 +101,7 @@ def main():
         additional_langs=data_args.additional_langs,
         keep_in_memory=True,
     )
-    datasets = datasets.shuffle(seed=training_args.seed)
+    # datasets = datasets.shuffle(seed=training_args.seed)
     test_name = "validation"
     if training_args.do_train:
         column_names = datasets["train"].column_names

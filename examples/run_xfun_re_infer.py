@@ -100,8 +100,8 @@ def main():
         additional_langs=data_args.additional_langs,
         keep_in_memory=True,
     )
-    datasets = datasets.shuffle(seed=training_args.seed)
-    test_name = "validation"
+    # datasets = datasets.shuffle(seed=training_args.seed)
+    # test_name = "validation"
     if training_args.do_train:
         column_names = datasets["train"].column_names
         features = datasets["train"].features
@@ -109,10 +109,8 @@ def main():
         column_names = datasets["validation"].column_names
         features = datasets["validation"].features
     else:
-        # column_names = datasets["test"].column_names
-        # features = datasets["test"].features
-        column_names = datasets[test_name].column_names
-        features = datasets[test_name].features
+        column_names = datasets["test"].column_names
+        features = datasets["test"].features
     
     text_column_name = "input_ids"
     label_column_name = "labels"
@@ -267,7 +265,7 @@ def main():
         # print(metrics)
         trainer.log_metrics("test", metrics)
         trainer.save_metrics("test", metrics)
-        output_test_predictions_file = os.path.join(training_args.output_dir, test_name + "_data_test_predictions_re.json")
+        output_test_predictions_file = os.path.join(training_args.output_dir,"_data_test_predictions_re.json")
         with open(output_test_predictions_file, 'w') as f:
             json.dump({'pred':predictions, 'label': labels}, f)
     wandb.finish()

@@ -74,7 +74,7 @@ class XFUN(datasets.GeneratorBasedBuilder):
                             "id":datasets.Value(dtype='string'),
                             "group_id":datasets.Value("int64"),
                             "index_id":datasets.Value("int64"),
-                            # "pred_label": datasets.ClassLabel(names=["HEADER", "QUESTION", "ANSWER", "SINGLE", "ANSWERNUM"]),
+                            "pred_label": datasets.ClassLabel(names=["HEADER", "QUESTION", "ANSWER", "SINGLE", "ANSWERNUM"]),
                         }
                     ),
                     "relations": datasets.Sequence(
@@ -136,7 +136,68 @@ class XFUN(datasets.GeneratorBasedBuilder):
             datasets.SplitGenerator(name=datasets.Split.TEST, gen_kwargs={"filepaths": test_files_for_many_langs,"MODE":"val"}),
         ]
 
+    def get_groups_from_boxes(self,boxes_tmp):
+        # print("get_groups_from_boxes")
+        groups = []
+        group = []
+        while len(boxes_tmp) > 0:
+            k = 0
+            while k < len(boxes_tmp):
+                _, bbox, line = boxes_tmp[k]
+                if group == []:
+                    group.append((bbox, line))
+                    boxes_tmp.pop(k)
+                    k-=1
+                else:
+                    boxs = []
+                    for box, _ in group:
+                        boxs.append(box)
+                    group_box = merge_bbox(boxs)
+                    if compute_y(group_box,bbox) > 70 and \
+                        compute_y(bbox,group_box) > 70:
+                        group.append((bbox, line))
+                        boxes_tmp.pop(k)
+                        k-=1
+                k+=1
+            boxs = []
+            for box, _ in group:
+                boxs.append(box)
+            group_box = merge_bbox(boxs)
+            groups.append((group_box,group))
+            group=[]
+         
+        if group != []:
+            groups.append(group)
+        # groups 外部排序
+        groups = sorted(groups, key=lambda x: (x[0][1],x[0][0]))
+            # groups 内部排序
+        for j, group in enumerate(groups):
+            groups[j] = (groups[j][0],sorted(groups[j][1], key=lambda x: (x[0][0],x[0][1])))
+
+        new_groups = []
+            
+        j=0
+        while j < len(groups):
+            x_group_box = groups[j][0]
+            group_tmp = deepcopy(groups[j][1])
+            k=0
+            while k < len(groups):
+                if k != j:
+                    y_group_box = groups[k][0]
+                    if overlapping_rectangles(x_group_box,y_group_box)> 70 or \
+                        overlapping_rectangles(y_group_box,x_group_box)> 70:
+                        group_tmp.extend(groups[k][1])
+                        groups.pop(k)
+                        k-=1
+                k+=1
+            j+=1
+            new_groups.append(group_tmp)
+        # print("get_groups_from_boxes end")
+        return new_groups
+
+
     def get_groups(self, MODE, doc, tables, size):
+        # print("get_groups")
         document = doc["document"]
         id = doc['id']
 
@@ -164,32 +225,12 @@ class XFUN(datasets.GeneratorBasedBuilder):
                 i+=1
 
             boxes = sorted(boxes, key=lambda x: x[0])
-
+            boxes_tmp = deepcopy(boxes)
+            groups = self.get_groups_from_boxes(boxes_tmp)
             # 行检测
-            groups = []
-            group = []
-            for _, bbox, line in boxes:
-                if group == []:
-                    group.append((bbox, line))
-                else:
-                    boxs = []
-                    for box, _ in group:
-                        boxs.append(box)
-                    group_box = merge_bbox(boxs)
-
-                    if compute_y(group_box,bbox) > 70 \
-                        and compute_y(bbox,group_box) > 70:
-                        group.append((bbox, line))
-                    else:
-                        groups.append(group)
-                        group = [(bbox, line)]
-                        
-            if group != []:
-                groups.append(group)
-            
+            boxes = []
             for group in groups:
                 group_src.append(group)
-                
                 for box, line in group:
                     # print(line['text'])
                     boxes.append(line)
@@ -214,10 +255,11 @@ class XFUN(datasets.GeneratorBasedBuilder):
                     insert_num+=1
                     break
         assert len(doc_tp) == insert_num
-
+        # print("get_groups end")
         return group_src
     
     def get_relations(self, relations,id2label,entity_id_to_index_map,entities):
+        # print("get_relation")
         relations = list(set(relations))
         kvrelations = []
         i = 0
@@ -226,7 +268,7 @@ class XFUN(datasets.GeneratorBasedBuilder):
             if rel[0] not in entity_id_to_index_map.keys() \
                 or rel[1] not in entity_id_to_index_map.keys():
                 relations.pop(i)
-                print("wrong")
+                # print("wrong")
                 i-=1
             i+=1
         for rel in relations:
@@ -259,6 +301,7 @@ class XFUN(datasets.GeneratorBasedBuilder):
                 ],
                 key=lambda x: x["head"],
             )
+        # print("get_relation end")
         return relations
     
     
@@ -277,9 +320,9 @@ class XFUN(datasets.GeneratorBasedBuilder):
             for group in groups:
                 _, line = group
                 if len(line["text"]) >= 90:
-                    print(line["text"])
+                    # print(line["text"])
                     line["text"] = "#$$$$$$$#"
-                    print(line["label"])
+                    # print(line["label"])
                 tokenized_inputs = tokenizer(
                         line["text"],
                         add_special_tokens=False,
@@ -300,6 +343,7 @@ class XFUN(datasets.GeneratorBasedBuilder):
                                 "id": line["id"],
                                 "linking": line["linking"],
                                 "label": line["label"].upper(),
+                                "pred_label": line["pred_label"].upper(),
                             }
                     )
                 for j in group_doc:
@@ -320,6 +364,7 @@ class XFUN(datasets.GeneratorBasedBuilder):
             maxsteps = min(512 // j + 50, 512)
         while len(group_doc_src) > 0:
             i = 0
+            # print(len(group_doc_src))
             tokenized_doc = {"input_ids": [],"bbox": [], "labels": []}
             entity_id_to_index_map = {}
             entities = []
@@ -381,6 +426,11 @@ class XFUN(datasets.GeneratorBasedBuilder):
                 id = doc['id']
                 # zh_train_80.jpg
                 print(id)
+                if id == "mytrain_407.jpg":
+                    last = True
+                else:
+                    pass
+                    # continue
                 tables = ocr_data[id][0]['tables']
                 image, size = load_image(doc["img"]["fpath"])
                 group_src = self.get_groups(MODE, doc, tables, size)
@@ -404,4 +454,5 @@ class XFUN(datasets.GeneratorBasedBuilder):
                             "entities": entities,
                             "relations": relations,
                         })
+                    print(f"{doc['id']}_{n}",len(item['input_ids']))
                     yield f"{doc['id']}_{n}", item

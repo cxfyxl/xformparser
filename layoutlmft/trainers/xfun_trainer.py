@@ -195,6 +195,19 @@ class XfunReTrainer(FunsdTrainer):
             self.control = self.callback_handler.on_prediction_step(self.args, self.state, self.control)
 
         gt_relations = []
+        pt_relations = []
+        # if 'pred_label' in entities[0].keys():
+        #     for b in range(len(pred_relations)):
+        #         rel_sent = []
+        #         for rel in pred_relations[b]:
+        #         # for head, tail in zip(pred_relations[b]["head"], pred_relations[b]["tail"]):
+        #             # if rel['head_type'] == 1 and (rel['tail_type'] == 2 or rel['tail_type'] == 4):
+        #             #     rel_sent.append(rel)
+        #             if rel['head_pred_type'] == 1 and (rel['tail_pred_type'] == 2 or rel['tail_pred_type'] == 4):
+        #                 rel_sent.append(rel)
+        #         pt_relations.append(rel_sent)
+        # else:
+        #     pt_relations = pred_relations
         for b in range(len(re_labels)):
             rel_sent = []
             for head, tail in zip(re_labels[b]["head"], re_labels[b]["tail"]):
@@ -213,6 +226,7 @@ class XfunReTrainer(FunsdTrainer):
 
             gt_relations.append(rel_sent)
         ner_labels,ner_pred_labels = None,None
+        
         # for i in range(len(entities)):
         #     if len(entities[i]['label']) == 0:
         #         continue

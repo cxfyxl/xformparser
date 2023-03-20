@@ -18,3 +18,4 @@ class ReOutput(ModelOutput):
     entities: Optional[Dict] = None
     relations: Optional[Dict] = None
     pred_relations: Optional[Dict] = None
+    gt_relations: Optional[Dict] = None

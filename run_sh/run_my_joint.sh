@@ -9,10 +9,10 @@ CUDA_VISIBLE_DEVICES=$1,$2 python -m torch.distributed.launch --master_port $3 -
         --save_strategy steps \
         --save_steps 100 \
         --load_best_model_at_end \
-        --save_total_limit 3 \
+        --save_total_limit 1 \
         --metric_for_best_model f1 \
-        --per_device_eval_batch_size 4 \
-        --per_device_train_batch_size 4 \
+        --per_device_eval_batch_size 2 \
+        --per_device_train_batch_size 2 \
         --do_train \
         --do_eval \
         --do_predict \

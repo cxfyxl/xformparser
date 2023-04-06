@@ -103,6 +103,15 @@ def compute_y(table_bbox,bbox):
     return overlap(y1,y2,y3,y4)/(table_bbox[3]-table_bbox[1])*100
 
 
+def compute_x(table_bbox,bbox):
+    x1,x2,x3,x4=table_bbox[2],table_bbox[0],bbox[2],bbox[0]
+    return overlap(x1,x2,x3,x4)/(table_bbox[2]-table_bbox[0])*100
+
+
+def compute_y_overlap(table_bbox,bbox):
+    # 左上角坐标为基准
+    y1,y2,y3,y4=table_bbox[1],table_bbox[3],bbox[1],bbox[3]
+    return abs(y1-y3)
 
 def bboxinRect(textbbox,bbox):
     x1, y1 = (textbbox[0]+ textbbox[2])/2,(textbbox[1]+ textbbox[3])/2

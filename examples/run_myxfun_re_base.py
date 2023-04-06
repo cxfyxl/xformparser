@@ -95,10 +95,9 @@ def main():
     #     additional_langs=data_args.additional_langs,
     #     keep_in_memory=True,
     # )
-    # myxfunsplit_table
     datasets = load_dataset(
-        '/home/zhanghang-s21/data/layoutlmft/layoutlmft/data/datasets/myxfunsplit_new.py',
-        "myxfunsplit_new.zh",
+        '/home/zhanghang-s21/data/layoutlmft/layoutlmft/data/datasets/myxfun.py',
+        "myxfun.zh",
         additional_langs=data_args.additional_langs,
         keep_in_memory=True,
     )

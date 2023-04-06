@@ -98,7 +98,7 @@ class XFUN(datasets.GeneratorBasedBuilder):
             # "train": [f"{_URL}{self.config.lang}_train.align.json", f"{_URL}{self.config.lang}.train.zip"],
             # "val": [f"{_URL}{self.config.lang}_val.align.json", f"{_URL}{self.config.lang}.val.zip"],
             # /home/zhanghang-s21/data/bishe/MYXFUND/mytrain.align.json
-            "train": [f"{_URL}mytrain.align.json", f"{_URL}mytrain.zip"],
+            "train": [f"{_URL}mytrain.new.align.json", f"{_URL}mytrain.zip"], # mytrain.new.align.json'
             "val": [f"{_URL}myval.new.align.json", f"{_URL}myval.zip"],
             "test": [f"{_URL}mytest.new.align.json", f"{_URL}mytest.zip"],
             # "val": [f"{_URL}myval.align.ner.json", f"{_URL}myval.zip"],
@@ -136,10 +136,14 @@ class XFUN(datasets.GeneratorBasedBuilder):
             datasets.SplitGenerator(name=datasets.Split.TEST, gen_kwargs={"filepaths": test_files_for_many_langs,"MODE":"val"}),
         ]
 
-    def get_groups_from_boxes(self,boxes_tmp):
-        # print("get_groups_from_boxes")
+
+    def get_boxes(self, boxes_tmp,compute_func,ratio):
         groups = []
         group = []
+        min_y = 30000
+        for tp in boxes_tmp:
+            _, bbox, line = tp
+            min_y = min(min_y,bbox[3]-bbox[1])
         while len(boxes_tmp) > 0:
             k = 0
             while k < len(boxes_tmp):
@@ -153,9 +157,9 @@ class XFUN(datasets.GeneratorBasedBuilder):
                     for box, _ in group:
                         boxs.append(box)
                     group_box = merge_bbox(boxs)
-                    if compute_y(group_box,bbox) > 70 and \
-                        compute_y(bbox,group_box) > 70:
-                        group.append((bbox, line))
+                    if compute_func(group_box,bbox) < min_y // 2 and \
+                        compute_func(bbox,group_box) < min_y // 2:
+                        group.append((bbox, line)) 
                         boxes_tmp.pop(k)
                         k-=1
                 k+=1
@@ -165,9 +169,14 @@ class XFUN(datasets.GeneratorBasedBuilder):
             group_box = merge_bbox(boxs)
             groups.append((group_box,group))
             group=[]
-         
+            
         if group != []:
             groups.append(group)
+        return groups
+    
+    def get_groups_from_boxes(self,boxes_tmp):
+        # print("get_groups_from_boxes")
+        groups = self.get_boxes(boxes_tmp,compute_y_overlap,70)
         # groups 外部排序
         groups = sorted(groups, key=lambda x: (x[0][1],x[0][0]))
             # groups 内部排序
@@ -175,23 +184,28 @@ class XFUN(datasets.GeneratorBasedBuilder):
             groups[j] = (groups[j][0],sorted(groups[j][1], key=lambda x: (x[0][0],x[0][1])))
 
         new_groups = []
-            
-        j=0
+        j = 0
         while j < len(groups):
-            x_group_box = groups[j][0]
-            group_tmp = deepcopy(groups[j][1])
-            k=0
-            while k < len(groups):
-                if k != j:
-                    y_group_box = groups[k][0]
-                    if overlapping_rectangles(x_group_box,y_group_box)> 70 or \
-                        overlapping_rectangles(y_group_box,x_group_box)> 70:
-                        group_tmp.extend(groups[k][1])
-                        groups.pop(k)
-                        k-=1
-                k+=1
+            new_groups.append(groups[j][1])
             j+=1
-            new_groups.append(group_tmp)
+           
+        # groups 合并    
+        # j=0
+        # while j < len(groups):
+        #     x_group_box = groups[j][0]
+        #     group_tmp = deepcopy(groups[j][1])
+        #     k=0
+        #     while k < len(groups):
+        #         if k != j:
+        #             y_group_box = groups[k][0]
+        #             if overlapping_rectangles(x_group_box,y_group_box)> 70 or \
+        #                 overlapping_rectangles(y_group_box,x_group_box)> 70:
+        #                 group_tmp.extend(groups[k][1])
+        #                 groups.pop(k)
+        #                 k-=1
+        #         k+=1
+        #     j+=1
+        #     new_groups.append(group_tmp)
         # print("get_groups_from_boxes end")
         return new_groups
 
@@ -239,22 +253,27 @@ class XFUN(datasets.GeneratorBasedBuilder):
             boxes_src.extend(boxes)
             table_index[table_id] = len(boxes_src)
                 
-        insert_num = 0    
-        for line in doc_tp:
+        
+        boxes = []
+        i = 0
+        while i < len(doc_tp):
+            line =  doc_tp[i]
             bbox = line['box']
-            insert_id = 0
-            for table_id, table in enumerate(tables):
-                table_bbox =  normalizebbox(table['bbox'], ocr_width, ocr_height,image_width, image_height)
-                if bbox[1] >= table_bbox[1]:
-                    insert_id = table_id
-                    break
-            boxes_src.insert(table_index[insert_id],line)
-            for index in group_index:
-                if group_index[index] >= table_index[insert_id]:
-                    group_src[index].append((bbox, line))
-                    insert_num+=1
-                    break
-        assert len(doc_tp) == insert_num
+            boxes.append((bbox[1], bbox, line))
+            i+=1
+        boxes = sorted(boxes, key=lambda x: x[0])
+        groups = self.get_groups_from_boxes(boxes)
+        
+        boxes = []
+        for group in groups:
+            group_src.append(group)
+            for box, line in group:
+                boxes.append(line)
+            group_index[group_id] = len(boxes_src) + len(boxes)
+            group_id += 1
+        boxes_src.extend(boxes)
+            
+        # assert len(doc_tp) == insert_num
         # print("get_groups end")
         return group_src
     
@@ -273,14 +292,20 @@ class XFUN(datasets.GeneratorBasedBuilder):
             i+=1
         for rel in relations:
             pair = [id2label[rel[0]], id2label[rel[1]]]           
-            if pair == ["question", "answer"]:
+            if pair == ["question", "answer"]  or pair == ["question", "answernum"] :
                 kvrelations.append(
                     {"head": entity_id_to_index_map[rel[0]], "tail": entity_id_to_index_map[rel[1]]}
                 )
-            elif pair == ["answer", "question"]:
+                if entity_id_to_index_map[rel[0]] >= entity_id_to_index_map[rel[1]]:
+                    print("question,answer")
+                    print(f"wrong in {rel[0]},{rel[1]}")
+            elif pair == ["answer", "question"] or pair == ["answernum", "question"]:
                 kvrelations.append(
                     {"head": entity_id_to_index_map[rel[1]], "tail": entity_id_to_index_map[rel[0]]}
                 )
+                if entity_id_to_index_map[rel[1]] >= entity_id_to_index_map[rel[0]]:
+                    print("answer,question")
+                    print(f"wrong in {rel[1]},{rel[0]}")
             else:
                 continue
         def get_relation_span(rel):

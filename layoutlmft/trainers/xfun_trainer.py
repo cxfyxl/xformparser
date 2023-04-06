@@ -372,6 +372,7 @@ class XfunReTrainer(FunsdTrainer):
             if "ner_loss" in outputs.keys():
                 ner_loss = outputs["ner_loss"] if isinstance(outputs, dict) else outputs[0]
                 re_loss = outputs["re_loss"] if isinstance(outputs, dict) else outputs[0]
+                
                 self.log({"ner_loss": ner_loss.item(),"re_loss":re_loss.item()})
 
         return (loss, outputs) if return_outputs else loss
@@ -825,7 +826,9 @@ class XfunJointTrainer(FunsdTrainer):
             if "ner_loss" in outputs.keys():
                 ner_loss = outputs["ner_loss"] if isinstance(outputs, dict) else outputs[0]
                 re_loss = outputs["re_loss"] if isinstance(outputs, dict) else outputs[0]
-                self.log({"ner_loss": ner_loss.item(),"re_loss":re_loss.item()})
+                log_var_ner = outputs["log_var_ner"] if isinstance(outputs, dict) else outputs[0]
+                log_var_re = outputs["log_var_re"] if isinstance(outputs, dict) else outputs[0]
+                self.log({"ner_loss": ner_loss.item(),"re_loss":re_loss.item(),"log_var_ner":log_var_re.item(),"log_var_re":log_var_re.item()})
 
         return (loss, outputs) if return_outputs else loss
     
@@ -839,7 +842,6 @@ class XfunJointTrainer(FunsdTrainer):
 
             logs["loss"] = round(tr_loss_scalar / (self.state.global_step - self._globalstep_last_logged), 4)
             logs["learning_rate"] = self._get_learning_rate()
-
             self._total_loss_scalar += tr_loss_scalar
             self._globalstep_last_logged = self.state.global_step
 

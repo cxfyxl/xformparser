@@ -1125,6 +1125,7 @@ class LayoutLMv2ForRelationExtraction(LayoutLMv2PreTrainedModel):
         super().__init__(config)
         self.layoutlmv2 = LayoutLMv2Model(config)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
+        self.lstm_layer = nn.LSTM(config.hidden_size, config.hidden_size // 2, 1, batch_first=True, bidirectional=True)
         self.extractor = REDecoder(config)
         self.init_weights()
 
@@ -1154,9 +1155,10 @@ class LayoutLMv2ForRelationExtraction(LayoutLMv2PreTrainedModel):
         seq_length = input_ids.size(1)
         sequence_output, image_output = outputs[0][:, :seq_length], outputs[0][:, seq_length:]
         sequence_output = self.dropout(sequence_output)
+        # sequence_output, (h_n, c_n) = self.lstm_layer(sequence_output)
         if torch.isnan(sequence_output).sum() != 0:
             print("loss wrong")
-        loss, pred_relations = self.extractor(sequence_output, entities, relations)
+        loss, pred_relations = self.extractor(sequence_output, entities, relations, bbox)
 
         return ReOutput(
             loss=loss,
@@ -1176,11 +1178,14 @@ class LayoutLMv2ForJointCellClassification(LayoutLMv2PreTrainedModel):
         self.layoutlmv2 = LayoutLMv2Model(config)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
         self.classifier = nn.Linear(config.hidden_size, config.num_labels)
+        self.lstm_layer = nn.LSTM(config.hidden_size, config.hidden_size // 2, 1, batch_first=True, bidirectional=True)
         self.extractor = CellDecoder(config)
+        self.group_emb = self.extractor.group_emb
+        self.index_emb = self.extractor.index_emb
         self.softmax = torch.nn.Softmax(dim=-1)
         self.loss_fct = CrossEntropyLoss()
-        self.adaptive_loss = False
-        self.multi_task = False
+        self.adaptive_loss = self.extractor.adaptive_loss
+        self.multi_task = self.extractor.multi_task
         self.log_var_ner = torch.nn.Parameter(torch.zeros((1,), requires_grad=True))
         self.init_weights()
         print(f"{self.__class__}:adaptive_loss:{self.adaptive_loss}\tmulti_task:{self.multi_task}")
@@ -1189,9 +1194,9 @@ class LayoutLMv2ForJointCellClassification(LayoutLMv2PreTrainedModel):
         return self.layoutlmv2.embeddings.word_embeddings
 
     def criterion(self, y_pred, y_true, log_vars,device):
-        precision = torch.exp(-log_vars)
+        precision = log_vars**2
         diff = self.loss_fct(y_pred,y_true)
-        loss = torch.sum(precision * diff + log_vars, -1)
+        loss = torch.sum(diff/precision,torch.log(log_vars))
         return loss
 
 
@@ -1231,24 +1236,36 @@ class LayoutLMv2ForJointCellClassification(LayoutLMv2PreTrainedModel):
         sequence_output, image_output = outputs[0][:, :seq_length], outputs[0][:, seq_length:]
         sequence_output = self.dropout(sequence_output)
         device = sequence_output.device
+        sequence_output, (h_n, c_n) = self.lstm_layer(sequence_output)
+        sequence_output = self.dropout(sequence_output)
         ner_loss = 0
         all_logits = []
         batch_size, max_n_words, context_dim = sequence_output.size()
         pred_entities = copy.deepcopy(entities)
         # std_1, std_2= torch.exp(self.log_var_a)**0.5, torch.exp(self.log_var_b)**0.5
-
+    
         for b in range(batch_size):
             if len(entities[b]["start"]) == 0:
                 continue
+            
             entities_start_index = torch.tensor(entities[b]["start"],device=device).type(torch.long)
             entities_end_index = torch.tensor(entities[b]["end"], device=device).type(torch.long)
+            entities_group_index = torch.tensor(entities[b]["group_id"], device=device)
+            entities_index_index = torch.tensor(entities[b]["index_id"], device=device)
             entity_repr = None
             for i in enumerate(entities_start_index):
                 index = i[0]
                 start_index, end_index = entities_start_index[index], entities_end_index[index]
-                temp_repr = sequence_output[b][start_index:end_index].mean(dim=0).view(1,context_dim)
-                # temp_repr = sequence_output[b][start_index:end_index].max(dim=0)[0].view(1,context_dim)
+                # group_repr,index_repr = self.group_emb(entities_group_index[index]),self.index_emb(entities_index_index[index])
+                # temp_repr = torch.cat(
+                #     (sequence_output[b][start_index:end_index].mean(dim=0), group_repr, index_repr),
+                #     dim=-1,
+                # ).view(1,context_dim*2)
+                temp_repr = sequence_output[b][start_index:end_index].max(dim=0)[0].view(1,context_dim)
+                
                 entity_repr = temp_repr if entity_repr == None else torch.cat([entity_repr,temp_repr],dim=0)
+                
+                
                 
             entities_labels = torch.tensor(entities[b]["label"],device=device).type(torch.long)
             
@@ -1273,6 +1290,8 @@ class LayoutLMv2ForJointCellClassification(LayoutLMv2PreTrainedModel):
             loss=loss,
             ner_loss=ner_loss,
             re_loss=re_loss,
+            log_var_ner=self.log_var_ner,
+            log_var_re =self.extractor.log_var_re,
             entities=entities,
             pred_entities=pred_entities,
             relations=relations,

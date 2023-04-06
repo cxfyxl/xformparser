@@ -38,7 +38,7 @@ class XFUNConfig(datasets.BuilderConfig):
 class XFUN(datasets.GeneratorBasedBuilder):
     """XFUN dataset."""
 
-    BUILDER_CONFIGS = [XFUNConfig(name=f"myxfuninfer.{lang}", lang=lang) for lang in _LANG]
+    BUILDER_CONFIGS = [XFUNConfig(name=f"myxfunsplit_table.{lang}", lang=lang) for lang in _LANG]
     ocr_data = {}
     input_ocr = ["/home/zhanghang-s21/data/bishe/ocr_data/aistrong_ocr_train", \
                 "/home/zhanghang-s21/data/bishe/ocr_data/aistrong_ocr_mytrain", \
@@ -74,7 +74,7 @@ class XFUN(datasets.GeneratorBasedBuilder):
                             "id":datasets.Value(dtype='string'),
                             "group_id":datasets.Value("int64"),
                             "index_id":datasets.Value("int64"),
-                            "pred_label": datasets.ClassLabel(names=["HEADER", "QUESTION", "ANSWER", "SINGLE", "ANSWERNUM"]),
+                            # "pred_label": datasets.ClassLabel(names=["HEADER", "QUESTION", "ANSWER", "SINGLE", "ANSWERNUM"]),
                         }
                     ),
                     "relations": datasets.Sequence(
@@ -98,9 +98,9 @@ class XFUN(datasets.GeneratorBasedBuilder):
             # "train": [f"{_URL}{self.config.lang}_train.align.json", f"{_URL}{self.config.lang}.train.zip"],
             # "val": [f"{_URL}{self.config.lang}_val.align.json", f"{_URL}{self.config.lang}.val.zip"],
             # /home/zhanghang-s21/data/bishe/MYXFUND/mytrain.align.json
-            # "train": [f"{_URL}mytrain.align.json", f"{_URL}mytrain.zip"],
-            "val": [f"{_URL}myval.new.align.ner.json", f"{_URL}myval.zip"],
-            "test": [f"{_URL}mytest.new.align.ner.json", f"{_URL}mytest.zip"],
+            "train": [f"{_URL}mytrain.align.json", f"{_URL}mytrain.zip"],
+            "val": [f"{_URL}myval.new.align.json", f"{_URL}myval.zip"],
+            "test": [f"{_URL}mytest.new.align.json", f"{_URL}mytest.zip"],
             # "val": [f"{_URL}myval.align.ner.json", f"{_URL}myval.zip"],
         
             # "val": [f"{_URL}myval.ner.json", f"{_URL}myval.zip"],
@@ -111,24 +111,24 @@ class XFUN(datasets.GeneratorBasedBuilder):
             # "test": [f"{_MYURL}mytrain.json", f"{_MYURL}mytrain.zip"],
         }
         downloaded_files = dl_manager.download_and_extract(urls_to_download)
-        # train_files_for_many_langs = [downloaded_files["train"]]
+        train_files_for_many_langs = [downloaded_files["train"]]
         val_files_for_many_langs = [downloaded_files["val"]]
         test_files_for_many_langs = [downloaded_files["test"]]
-        # if self.config.additional_langs:
-        #     additional_langs = self.config.additional_langs.split("+")
-        #     if "all" in additional_langs:
-        #         additional_langs = [lang for lang in _LANG if lang != self.config.lang]
-        #     for lang in additional_langs:
-        #         urls_to_download = {"train": [f"{_URL}{lang}.train.json", f"{_URL}{lang}.train.zip"]}
-        #         additional_downloaded_files = dl_manager.download_and_extract(urls_to_download)
-        #         train_files_for_many_langs.append(additional_downloaded_files["train"])
+        if self.config.additional_langs:
+            additional_langs = self.config.additional_langs.split("+")
+            if "all" in additional_langs:
+                additional_langs = [lang for lang in _LANG if lang != self.config.lang]
+            for lang in additional_langs:
+                urls_to_download = {"train": [f"{_URL}{lang}.train.json", f"{_URL}{lang}.train.zip"]}
+                additional_downloaded_files = dl_manager.download_and_extract(urls_to_download)
+                train_files_for_many_langs.append(additional_downloaded_files["train"])
 
         logger.info(f"Training on {self.config.lang} with additional langs({self.config.additional_langs})")
         logger.info(f"Evaluating on {self.config.lang}")
         logger.info(f"Testing on {self.config.lang}")
         return [
-            # datasets.SplitGenerator(name=datasets.Split.TRAIN, gen_kwargs={"filepaths": train_files_for_many_langs, \
-            #     "MODE":"train"}),
+            datasets.SplitGenerator(name=datasets.Split.TRAIN, gen_kwargs={"filepaths": train_files_for_many_langs, \
+                "MODE":"train"}),
             datasets.SplitGenerator(
                 name=datasets.Split.VALIDATION, gen_kwargs={"filepaths": val_files_for_many_langs, \
                     "MODE":"val"}
@@ -136,14 +136,9 @@ class XFUN(datasets.GeneratorBasedBuilder):
             datasets.SplitGenerator(name=datasets.Split.TEST, gen_kwargs={"filepaths": test_files_for_many_langs,"MODE":"val"}),
         ]
 
-
-    def get_boxes(self, boxes_tmp,compute_func,ratio):
+    def get_boxes(self,boxes_tmp,compute_func,ratio):
         groups = []
         group = []
-        min_y = 30000
-        for tp in boxes_tmp:
-            _, bbox, line = tp
-            min_y = min(min_y,bbox[3]-bbox[1])
         while len(boxes_tmp) > 0:
             k = 0
             while k < len(boxes_tmp):
@@ -157,9 +152,9 @@ class XFUN(datasets.GeneratorBasedBuilder):
                     for box, _ in group:
                         boxs.append(box)
                     group_box = merge_bbox(boxs)
-                    if compute_func(group_box,bbox) < min_y // 2 and \
-                        compute_func(bbox,group_box) < min_y // 2:
-                        group.append((bbox, line)) 
+                    if compute_func(group_box,bbox) > ratio and \
+                        compute_func(bbox,group_box) > ratio:
+                        group.append((bbox, line))
                         boxes_tmp.pop(k)
                         k-=1
                 k+=1
@@ -173,10 +168,11 @@ class XFUN(datasets.GeneratorBasedBuilder):
         if group != []:
             groups.append(group)
         return groups
-    
     def get_groups_from_boxes(self,boxes_tmp):
         # print("get_groups_from_boxes")
-        groups = self.get_boxes(boxes_tmp,compute_y_overlap,70)
+        groups = []
+        group = []
+        groups = self.get_boxes(boxes_tmp,compute_y,70)
         # groups 外部排序
         groups = sorted(groups, key=lambda x: (x[0][1],x[0][0]))
             # groups 内部排序
@@ -184,30 +180,62 @@ class XFUN(datasets.GeneratorBasedBuilder):
             groups[j] = (groups[j][0],sorted(groups[j][1], key=lambda x: (x[0][0],x[0][1])))
 
         new_groups = []
-        j = 0
+            
+        j=0
         while j < len(groups):
-            new_groups.append(groups[j][1])
+            x_group_box = groups[j][0]
+            group_tmp = deepcopy(groups[j][1])
+            k=0
+            while k < len(groups):
+                if k != j:
+                    y_group_box = groups[k][0]
+                    if overlapping_rectangles(x_group_box,y_group_box)> 70 or \
+                        overlapping_rectangles(y_group_box,x_group_box)> 70:
+                        group_tmp.extend(groups[k][1])
+                        groups.pop(k)
+                        k-=1
+                k+=1
             j+=1
-           
-        # groups 合并    
-        # j=0
-        # while j < len(groups):
-        #     x_group_box = groups[j][0]
-        #     group_tmp = deepcopy(groups[j][1])
-        #     k=0
-        #     while k < len(groups):
-        #         if k != j:
-        #             y_group_box = groups[k][0]
-        #             if overlapping_rectangles(x_group_box,y_group_box)> 70 or \
-        #                 overlapping_rectangles(y_group_box,x_group_box)> 70:
-        #                 group_tmp.extend(groups[k][1])
-        #                 groups.pop(k)
-        #                 k-=1
-        #         k+=1
-        #     j+=1
-        #     new_groups.append(group_tmp)
+            new_groups.append(group_tmp)
+        j=0
+        new_groups_src = []
+        while j < len(new_groups):
+            label_list = [i[1]['label'] for i in new_groups[j]]
+            label_list = set(label_list)
+            if len(label_list) == 1 and len(new_groups[j]) > 1 \
+                and ("question" in label_list) :
+                group_tmp = [(i[0][0],i[0],i[1]) for i in new_groups[j]]
+                # print(1) 
+                k = j+1
+                flag = False
+                while k < len(new_groups):
+                    label_list = [i[1]['label'] for i in new_groups[k]]
+                    label_list = set(label_list)
+                    if len(label_list) == 1 and len(new_groups[k]) > 1 \
+                        and ("answer" in label_list):
+                        group_tmp.extend([(i[0][0],i[0],i[1]) for i in new_groups[k]])
+                        new_groups.pop(k)
+                        flag = True
+                        k-=1
+                        # print(2)
+                    else:
+                        break
+                        
+                    k+=1
+                    # sorted(groups[j][1], key=lambda x: (x[0][0],x[0][1]))
+                if flag:
+                    group_tmp = self.get_boxes(group_tmp,compute_x,5)
+                    group_tmp = [i[1] for i in group_tmp]
+                    # group_tmp = sorted(group_tmp,key=lambda x: (x[0][0]))
+                    new_groups_src.extend(group_tmp)
+                else:
+                    new_groups_src.append(new_groups[j])
+            else:
+                new_groups_src.append(new_groups[j])
+
+            j+=1
         # print("get_groups_from_boxes end")
-        return new_groups
+        return new_groups_src
 
 
     def get_groups(self, MODE, doc, tables, size):
@@ -253,31 +281,27 @@ class XFUN(datasets.GeneratorBasedBuilder):
             boxes_src.extend(boxes)
             table_index[table_id] = len(boxes_src)
                 
-        
-        boxes = []
-        i = 0
-        while i < len(doc_tp):
-            line =  doc_tp[i]
+        insert_num = 0    
+        for line in doc_tp:
             bbox = line['box']
-            boxes.append((bbox[1], bbox, line))
-            i+=1
-        boxes = sorted(boxes, key=lambda x: x[0])
-        groups = self.get_groups_from_boxes(boxes)
-        
-        boxes = []
-        for group in groups:
-            group_src.append(group)
-            for box, line in group:
-                boxes.append(line)
-            group_index[group_id] = len(boxes_src) + len(boxes)
-            group_id += 1
-        boxes_src.extend(boxes)
-            
-        # assert len(doc_tp) == insert_num
+            insert_id = 0
+            for table_id, table in enumerate(tables):
+                table_bbox =  normalizebbox(table['bbox'], ocr_width, ocr_height,image_width, image_height)
+                if bbox[1] >= table_bbox[1]:
+                    insert_id = table_id
+                    break
+            boxes_src.insert(table_index[insert_id],line)
+            for index in group_index:
+                if group_index[index] >= table_index[insert_id]:
+                    group_src[index].append((bbox, line))
+                    insert_num+=1
+                    break
+        assert len(doc_tp) == insert_num
         # print("get_groups end")
         return group_src
     
     def get_relations(self, relations,id2label,entity_id_to_index_map,entities):
+        # print("get_relation")
         relations = list(set(relations))
         kvrelations = []
         i = 0
@@ -291,22 +315,14 @@ class XFUN(datasets.GeneratorBasedBuilder):
             i+=1
         for rel in relations:
             pair = [id2label[rel[0]], id2label[rel[1]]]           
-            if pair == ["question", "answer"]  or pair == ["question", "answernum"] :
+            if pair == ["question", "answer"]:
                 kvrelations.append(
                     {"head": entity_id_to_index_map[rel[0]], "tail": entity_id_to_index_map[rel[1]]}
                 )
-                if entity_id_to_index_map[rel[0]] >= entity_id_to_index_map[rel[1]]:
-                    print("question,answer")
-                    print(f"wrong in {rel[0]},{rel[1]}")
-                    print(f"{entity_id_to_index_map[rel[0]]},{entity_id_to_index_map[rel[1]]}")
-            elif pair == ["answer", "question"] or pair == ["answernum", "question"]:
+            elif pair == ["answer", "question"]:
                 kvrelations.append(
                     {"head": entity_id_to_index_map[rel[1]], "tail": entity_id_to_index_map[rel[0]]}
                 )
-                if entity_id_to_index_map[rel[1]] >= entity_id_to_index_map[rel[0]]:
-                    print("answer,question")
-                    print(f"wrong in {rel[1]},{rel[0]}")
-                    print(f"{entity_id_to_index_map[rel[1]]},{entity_id_to_index_map[rel[0]]}")
             else:
                 continue
         def get_relation_span(rel):
@@ -369,7 +385,6 @@ class XFUN(datasets.GeneratorBasedBuilder):
                                 "id": line["id"],
                                 "linking": line["linking"],
                                 "label": line["label"].upper(),
-                                "pred_label": line["pred_label"].upper(),
                             }
                     )
                 for j in group_doc:

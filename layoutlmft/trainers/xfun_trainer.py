@@ -687,7 +687,7 @@ class XfunJointTrainer(FunsdTrainer):
             ner_labels = entities[i]['label'] if ner_labels is None else ner_labels + entities[i]['label']
             ner_pred_labels = pred_entities[i]['label'] if ner_pred_labels is None else ner_pred_labels + pred_entities[i]['label']
             if len(entities[i]['label']) != len(pred_entities[i]['label']):
-                print("wrong")      
+                print("wrong in len")      
         ner_metrics = accuracy_score(ner_labels,ner_pred_labels)
         re_metrics = self.compute_metrics(EvalPrediction(predictions=pred_relations, label_ids=gt_relations))
 
@@ -723,7 +723,7 @@ class XfunJointTrainer(FunsdTrainer):
         self.args.local_rank = -1
         test_dataloader = self.get_test_dataloader(test_dataset)
         # 不使用多卡
-        self.args.local_rank = torch.distributed.get_rank()
+        # self.args.local_rank = torch.distributed.get_rank()
 
         start_time = time.time()
 
@@ -779,7 +779,7 @@ class XfunJointTrainer(FunsdTrainer):
 
         self.args.local_rank = -1
         eval_dataloader = self.get_eval_dataloader(eval_dataset)
-        self.args.local_rank = torch.distributed.get_rank()
+        # self.args.local_rank = torch.distributed.get_rank()
 
         start_time = time.time()
 

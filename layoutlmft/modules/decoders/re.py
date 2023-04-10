@@ -108,18 +108,21 @@ class MyBiaffineAttention(torch.nn.Module):
 class REDecoder(nn.Module):
     def __init__(self, config):
         super().__init__()
-        self.entity_emb = nn.Embedding(5, config.hidden_size, scale_grad_by_freq=True)
-        self.group_emb = nn.Embedding(50, config.hidden_size // 4, scale_grad_by_freq=True)
-        self.index_emb= nn.Embedding(50, config.hidden_size // 4, scale_grad_by_freq=True)
         self.angle_dim = config.hidden_size // 2
-        self.angle_embedding = nn.Embedding(8,self.angle_dim, scale_grad_by_freq=True)
+        self.group_dim = config.hidden_size // 4
         self.use_angle = False
         self.use_specialid = False
         self.del_begin = 0
         self.del_end = 50
         self.mlp_dim = config.hidden_size * 2   # + config.hidden_size
+        self.use_del = True
+        self.entity_emb = nn.Embedding(5, config.hidden_size, scale_grad_by_freq=True)
+        self.group_emb = nn.Embedding(50, config.hidden_size // 4, scale_grad_by_freq=True)
+        self.index_emb= nn.Embedding(50, config.hidden_size // 4, scale_grad_by_freq=True)
+        self.angle_embedding = nn.Embedding(8,self.angle_dim, scale_grad_by_freq=True)
+
         if self.use_specialid:
-            self.mlp_dim += config.hidden_size // 2
+            self.mlp_dim += self.group_dim * 2
         projection = nn.Sequential(
             nn.Linear(self.mlp_dim, self.mlp_dim // 2),
             nn.ReLU(),
@@ -138,8 +141,8 @@ class REDecoder(nn.Module):
         
         self.loss_fct = CrossEntropyLoss()
         self.angle_cnt = {}
-        self.use_del = True
-        print(f"self.use_specialid:{self.use_specialid},self.group_emb:{config.hidden_size // 4}")
+
+        print(f"self.use_specialid:{self.use_specialid},self.group_emb:{self.group_dim}")
         print(f"self.del_begin:{self.del_begin},self.del_end:{self.del_end},self.use_del:{self.use_del}")
 
     def build_seq(self,relations,entities,b,key):
@@ -166,16 +169,18 @@ class REDecoder(nn.Module):
                     if entities[b][key][i] == 1 and (entities[b][key][j] == 2 or entities[b][key][j] == 4) # entities[b]["label"][j] == 2 or entities[b]["label"][j] == 4
                 ]
             )
+            
+        if len(all_possible_relations) == 0:
+            all_possible_relations = gt_possible_relations = set([(0, 1)])
         positive_relations = set(list(zip(relations[b]["head"], relations[b]["tail"])))
         if positive_relations.issubset(all_possible_relations):
             pass
         else:
             # pass
-            print("wrong")
+            print("wrong, loss relation")
         if self.training:
             all_possible_relations = all_possible_relations | positive_relations
-        if len(all_possible_relations) == 0:
-            all_possible_relations = gt_possible_relations = set([(0, 1)])
+
         
         negative_relations = all_possible_relations - positive_relations
         positive_relations = set([i for i in positive_relations if i in all_possible_relations])
@@ -376,7 +381,7 @@ class CellDecoder(nn.Module):
         self.group_emb = nn.Embedding(50, self.group_dim, scale_grad_by_freq=True)
         self.index_emb= nn.Embedding(50, self.group_dim, scale_grad_by_freq=True)
         # self.entity_emb_rand = nn.Embedding(5, config.hidden_size, scale_grad_by_freq=True)
-        self.use_specialid = True
+        self.use_specialid = False
         if self.use_specialid:
             self.mlp_dim = config.hidden_size * 2 + 2 * self.group_dim
         else:

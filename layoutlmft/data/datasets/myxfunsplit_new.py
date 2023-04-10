@@ -141,9 +141,21 @@ class XFUN(datasets.GeneratorBasedBuilder):
         groups = []
         group = []
         min_y = 30000
+        min_x = 30000
+        x_list = set()
+        y_list = set()
         for tp in boxes_tmp:
             _, bbox, line = tp
             min_y = min(min_y,bbox[3]-bbox[1])
+            min_x = min(min_x,bbox[2]-bbox[0])
+            x_list.add(bbox[0])
+            x_list.add(bbox[2])
+            y_list.add(bbox[1])
+            y_list.add(bbox[3])
+        if len(y_list) != 0:
+            y_index = group_by_threshold(list(y_list),min_y // 2)
+            x_index = group_by_threshold(list(x_list),min_x // 2)
+            
         while len(boxes_tmp) > 0:
             k = 0
             while k < len(boxes_tmp):
@@ -157,8 +169,7 @@ class XFUN(datasets.GeneratorBasedBuilder):
                     for box, _ in group:
                         boxs.append(box)
                     group_box = merge_bbox(boxs)
-                    if compute_func(group_box,bbox) < min_y // 2 and \
-                        compute_func(bbox,group_box) < min_y // 2:
+                    if get_overlap_byrelative(group_box,bbox,y_index):
                         group.append((bbox, line)) 
                         boxes_tmp.pop(k)
                         k-=1
@@ -172,41 +183,25 @@ class XFUN(datasets.GeneratorBasedBuilder):
             
         if group != []:
             groups.append(group)
-        return groups
+        return groups,x_index,y_index
     
     def get_groups_from_boxes(self,boxes_tmp):
         # print("get_groups_from_boxes")
-        groups = self.get_boxes(boxes_tmp,compute_y_overlap,70)
+        if len(boxes_tmp) == 0:
+            return []
+        groups,x_index, y_index = self.get_boxes(boxes_tmp,compute_y_overlap,70)
         # groups 外部排序
         groups = sorted(groups, key=lambda x: (x[0][1],x[0][0]))
             # groups 内部排序
         for j, group in enumerate(groups):
-            groups[j] = (groups[j][0],sorted(groups[j][1], key=lambda x: (x[0][0],x[0][1])))
-
+            groups[j] = (groups[j][0],sorted(groups[j][1], key=lambda x: (y_index[x[0][1]], x_index[x[0][0]]) ))
+ 
         new_groups = []
         j = 0
         while j < len(groups):
             new_groups.append(groups[j][1])
             j+=1
-           
-        # groups 合并    
-        # j=0
-        # while j < len(groups):
-        #     x_group_box = groups[j][0]
-        #     group_tmp = deepcopy(groups[j][1])
-        #     k=0
-        #     while k < len(groups):
-        #         if k != j:
-        #             y_group_box = groups[k][0]
-        #             if overlapping_rectangles(x_group_box,y_group_box)> 70 or \
-        #                 overlapping_rectangles(y_group_box,x_group_box)> 70:
-        #                 group_tmp.extend(groups[k][1])
-        #                 groups.pop(k)
-        #                 k-=1
-        #         k+=1
-        #     j+=1
-        #     new_groups.append(group_tmp)
-        # print("get_groups_from_boxes end")
+            
         return new_groups
 
 
@@ -220,11 +215,13 @@ class XFUN(datasets.GeneratorBasedBuilder):
         group_src = []
         ocr_width, ocr_height, image_width, image_height = get_image(MODE,id)
         doc_tp = deepcopy(document)
-        table_index = {}
         group_index = {}
         group_id = 0
 
+        group_src_new = []
+        
         for table_id, table in enumerate(tables):
+            group_src = []
             boxes = []
             table_bbox =  normalizebbox(table['bbox'], ocr_width, ocr_height,image_width, image_height)
             
@@ -251,9 +248,9 @@ class XFUN(datasets.GeneratorBasedBuilder):
                 group_index[group_id] = len(boxes_src) + len(boxes)
                 group_id += 1
             boxes_src.extend(boxes)
-            table_index[table_id] = len(boxes_src)
-                
+            group_src_new.append(group_src)
         
+        group_src = []     
         boxes = []
         i = 0
         while i < len(doc_tp):
@@ -272,10 +269,11 @@ class XFUN(datasets.GeneratorBasedBuilder):
             group_index[group_id] = len(boxes_src) + len(boxes)
             group_id += 1
         boxes_src.extend(boxes)
-            
+        if len(group_src) > 0:
+            group_src_new.append(group_src)
         # assert len(doc_tp) == insert_num
         # print("get_groups end")
-        return group_src
+        return group_src_new
     
     def get_relations(self, relations,id2label,entity_id_to_index_map,entities):
         # print("get_relation")
@@ -338,6 +336,7 @@ class XFUN(datasets.GeneratorBasedBuilder):
         tokenizer = self.tokenizer
         
         group_total_len = 0
+        group_max_len = -1
         for groups in group_src:
             group_doc = {"input_ids": [], "bbox": [], "labels": []}
             group_entities =[]
@@ -374,7 +373,7 @@ class XFUN(datasets.GeneratorBasedBuilder):
                     group_doc[j] = group_doc[j] + tokenized_inputs[j]     
             group_doc_src.append((len(group_doc["input_ids"]), group_entities, group_doc))
             group_total_len += len(group_doc["input_ids"])
-            
+            group_max_len = max(group_max_len,len(group_doc["input_ids"]))
     
         tokenized_doc_src = []
         entities_src = []
@@ -386,6 +385,8 @@ class XFUN(datasets.GeneratorBasedBuilder):
         if group_total_len > 512:
             j = math.ceil(group_total_len/512)
             maxsteps = min(512 // j + 50, 512)
+            if group_max_len > maxsteps:
+                maxsteps = min(group_max_len+50,512)
         while len(group_doc_src) > 0:
             i = 0
             # print(len(group_doc_src))
@@ -457,26 +458,29 @@ class XFUN(datasets.GeneratorBasedBuilder):
                     # continue
                 tables = ocr_data[id][0]['tables']
                 image, size = load_image(doc["img"]["fpath"])
-                group_src = self.get_groups(MODE, doc, tables, size)
-                tokenized_doc_src, entities_src, entity_id_to_index_map_src, relations_src= self.get_docs(group_src, size)
-                
-                # relations = [rel for rel in relations if rel[0] not in empty_entity and rel[1] not in empty_entity]
-                
-                for n, tokenized_doc in enumerate(tokenized_doc_src):
-                    entities = entities_src[n]
-                    entity_id_to_index_map = entity_id_to_index_map_src[n]
-                    relations = relations_src[n]
-                    item = {}
-                    for k in tokenized_doc:
-                        item[k] = tokenized_doc[k]
+                group_src_new  = self.get_groups(MODE, doc, tables, size)
+                index_n = -1
+                for group_src in group_src_new:
+                    tokenized_doc_src, entities_src, entity_id_to_index_map_src, relations_src= self.get_docs(group_src, size)
                     
-                    item.update(
-                        {
-                            "id": f"{doc['id']}_{n}",
-                            "len":len(item["input_ids"]), 
-                            "image": image,
-                            "entities": entities,
-                            "relations": relations,
-                        })
-                    print(f"{doc['id']}_{n}",len(item['input_ids']))
-                    yield f"{doc['id']}_{n}", item
+                    # relations = [rel for rel in relations if rel[0] not in empty_entity and rel[1] not in empty_entity]
+                    
+                    for n, tokenized_doc in enumerate(tokenized_doc_src):
+                        entities = entities_src[n]
+                        entity_id_to_index_map = entity_id_to_index_map_src[n]
+                        relations = relations_src[n]
+                        item = {}
+                        for k in tokenized_doc:
+                            item[k] = tokenized_doc[k]
+                        index_n+=1
+                        item.update(
+                            {
+                                "id": f"{doc['id']}_{index_n}",
+                                "len":len(item["input_ids"]), 
+                                "image": image,
+                                "entities": entities,
+                                "relations": relations,
+                            })
+                        print(f"{doc['id']}_{index_n}",len(item['input_ids']))
+                        yield f"{doc['id']}_{index_n}", item
+                        

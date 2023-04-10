@@ -1236,8 +1236,8 @@ class LayoutLMv2ForJointCellClassification(LayoutLMv2PreTrainedModel):
         sequence_output, image_output = outputs[0][:, :seq_length], outputs[0][:, seq_length:]
         sequence_output = self.dropout(sequence_output)
         device = sequence_output.device
-        sequence_output, (h_n, c_n) = self.lstm_layer(sequence_output)
-        sequence_output = self.dropout(sequence_output)
+        # sequence_output, (h_n, c_n) = self.lstm_layer(sequence_output)
+        # sequence_output = self.dropout(sequence_output)
         ner_loss = 0
         all_logits = []
         batch_size, max_n_words, context_dim = sequence_output.size()
@@ -1261,8 +1261,8 @@ class LayoutLMv2ForJointCellClassification(LayoutLMv2PreTrainedModel):
                 #     (sequence_output[b][start_index:end_index].mean(dim=0), group_repr, index_repr),
                 #     dim=-1,
                 # ).view(1,context_dim*2)
-                temp_repr = sequence_output[b][start_index:end_index].max(dim=0)[0].view(1,context_dim)
-                
+                #temp_repr = sequence_output[b][start_index:end_index].max(dim=0)[0].view(1,context_dim)
+                temp_repr = sequence_output[b][start_index:end_index].mean(dim=0).view(1,context_dim)
                 entity_repr = temp_repr if entity_repr == None else torch.cat([entity_repr,temp_repr],dim=0)
                 
                 
@@ -1281,7 +1281,7 @@ class LayoutLMv2ForJointCellClassification(LayoutLMv2PreTrainedModel):
                 ner_loss += self.loss_fct(logits, entities_labels)
             all_logits.append(logits)
 
-        re_loss, pred_relations = self.extractor(sequence_output, pred_entities, entities, relations)
+        re_loss, pred_relations = self.extractor(sequence_output, copy.deepcopy(pred_entities), entities, relations)
         gamma = 0.33
         loss = ner_loss + re_loss
         # loss = re_loss

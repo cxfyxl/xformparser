@@ -4,6 +4,36 @@ from detectron2.data.detection_utils import read_image
 from detectron2.data.transforms import ResizeTransform, TransformList
 from PIL import Image
 import os
+
+
+def group_by_threshold(lst, threshold):
+    lst.sort()
+    result = []
+    current_group = [lst[0]]
+    for i in range(1, len(lst)):
+        if lst[i] - current_group[-1] <= threshold:
+            current_group.append(lst[i])
+        else:
+            result.append(current_group)
+            current_group = [lst[i]]
+    result.append(current_group)
+    i = 0
+    index_dict = {}
+    for group in result:
+        for id in group:
+            index_dict[id] = i
+        i+=1
+    return index_dict
+
+def get_overlap_byrelative(group_box,bbox,index):
+    l_begin,l_end = index[group_box[1]], index[group_box[3]]
+    r_begin,r_end = index[bbox[1]], index[bbox[3]]
+    if l_begin >= r_end or l_end <= r_begin:
+        return False
+    else:
+        return True
+    
+    
 def overlapping_rectangles(rect1, rect2):
     """
     判断两个矩形是否有重叠，如果有，返回重叠的面积。

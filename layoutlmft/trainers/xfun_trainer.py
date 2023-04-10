@@ -723,7 +723,7 @@ class XfunJointTrainer(FunsdTrainer):
         self.args.local_rank = -1
         test_dataloader = self.get_test_dataloader(test_dataset)
         # 不使用多卡
-        # self.args.local_rank = torch.distributed.get_rank()
+        self.args.local_rank = torch.distributed.get_rank()
 
         start_time = time.time()
 
@@ -779,7 +779,7 @@ class XfunJointTrainer(FunsdTrainer):
 
         self.args.local_rank = -1
         eval_dataloader = self.get_eval_dataloader(eval_dataset)
-        # self.args.local_rank = torch.distributed.get_rank()
+        self.args.local_rank = torch.distributed.get_rank()
 
         start_time = time.time()
 

@@ -447,7 +447,7 @@ class CellDecoder(nn.Module):
                 all_possible_relations = set([(0, 1)])
             positive_relations = set(list(zip(relations[b]["head"], relations[b]["tail"])))
             if not positive_relations.issubset(all_possible_relations):
-                print("wrong")
+                print("loss relations")
                 pass
             # if self.training:
             #     all_possible_relations = all_possible_relations | positive_relations

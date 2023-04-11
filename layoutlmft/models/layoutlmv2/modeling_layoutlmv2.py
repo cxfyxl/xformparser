@@ -1236,8 +1236,8 @@ class LayoutLMv2ForJointCellClassification(LayoutLMv2PreTrainedModel):
         sequence_output, image_output = outputs[0][:, :seq_length], outputs[0][:, seq_length:]
         sequence_output = self.dropout(sequence_output)
         device = sequence_output.device
-        # sequence_output, (h_n, c_n) = self.lstm_layer(sequence_output)
-        # sequence_output = self.dropout(sequence_output)
+        sequence_output, (h_n, c_n) = self.lstm_layer(sequence_output)
+        sequence_output = self.dropout(sequence_output)
         ner_loss = 0
         all_logits = []
         batch_size, max_n_words, context_dim = sequence_output.size()

@@ -111,14 +111,14 @@ class REDecoder(nn.Module):
         self.angle_dim = config.hidden_size // 2
         self.group_dim = config.hidden_size // 4
         self.use_angle = False
-        self.use_specialid = False
+        self.use_specialid = True
         self.del_begin = 0
         self.del_end = 50
         self.mlp_dim = config.hidden_size * 2   # + config.hidden_size
         self.use_del = True
         self.entity_emb = nn.Embedding(5, config.hidden_size, scale_grad_by_freq=True)
-        self.group_emb = nn.Embedding(50, config.hidden_size // 4, scale_grad_by_freq=True)
-        self.index_emb= nn.Embedding(50, config.hidden_size // 4, scale_grad_by_freq=True)
+        self.group_emb = nn.Embedding(35, config.hidden_size // 4, scale_grad_by_freq=True)
+        self.index_emb= nn.Embedding(35, config.hidden_size // 4, scale_grad_by_freq=True)
         self.angle_embedding = nn.Embedding(8,self.angle_dim, scale_grad_by_freq=True)
 
         if self.use_specialid:
@@ -202,7 +202,7 @@ class REDecoder(nn.Module):
         gt_relations = []
         for b in range(batch_size):
             if len(entities[b]["start"]) <= 2:
-                entities[b] = {"end": [1, 1], "label": [0, 0], "start": [0, 0],"group_id":[0, 0],"index_id":[0, 0]}
+                entities[b] = {"end": [1, 1], "label": [0, 0], "start": [0, 0],"column_id":[0, 0],"row_id":[0, 0]}
             if "pred_label" not in entities[b].keys():
                 relation_per_doc = self.build_seq(relations,entities,b,"label")
             else:
@@ -307,8 +307,8 @@ class REDecoder(nn.Module):
             relation_labels = torch.tensor(relations[b]["label"], device=device)
             entities_start_index = torch.tensor(entities[b]["start"], device=device)
             entities_end_index = torch.tensor(entities[b]["end"], device=device)
-            entities_group_index = torch.tensor(entities[b]["group_id"], device=device)
-            entities_index_index = torch.tensor(entities[b]["index_id"], device=device)
+            entities_group_index = torch.tensor(entities[b]["row_id"], device=device)
+            entities_index_index = torch.tensor(entities[b]["column_id"], device=device)
             entities_bbox = torch.tensor(bbox[b], device=device)
             head_bbox_x,head_bbox_y = entities_bbox[head_entities][:,1],entities_bbox[head_entities][:,2]
             tail_bbox_x,tail_bbox_y = entities_bbox[tail_entities][:,1],entities_bbox[tail_entities][:,2]
@@ -378,10 +378,10 @@ class CellDecoder(nn.Module):
         self.log_var_re = torch.nn.Parameter(torch.zeros((1,), requires_grad=True))
         self.entity_emb = nn.Embedding(5, config.hidden_size, scale_grad_by_freq=True)
         self.group_dim = config.hidden_size // 2
-        self.group_emb = nn.Embedding(50, self.group_dim, scale_grad_by_freq=True)
-        self.index_emb= nn.Embedding(50, self.group_dim, scale_grad_by_freq=True)
+        self.group_emb = nn.Embedding(35, self.group_dim, scale_grad_by_freq=True)
+        self.index_emb= nn.Embedding(35, self.group_dim, scale_grad_by_freq=True)
         # self.entity_emb_rand = nn.Embedding(5, config.hidden_size, scale_grad_by_freq=True)
-        self.use_specialid = False
+        self.use_specialid = True
         if self.use_specialid:
             self.mlp_dim = config.hidden_size * 2 + 2 * self.group_dim
         else:
@@ -421,7 +421,7 @@ class CellDecoder(nn.Module):
         new_relations = []
         for b in range(batch_size):
             if len(entities[b]["start"]) <= 2:
-                entities[b] = pred_entities[b] = {"end": [1, 1], "label": [0, 0], "start": [0, 0],"group_id":[0, 0],"index_id":[0, 0]}
+                entities[b] = pred_entities[b] = {"end": [1, 1], "label": [0, 0], "start": [0, 0],"column_id":[0, 0],"row_id":[0, 0]}
             if self.use_del:
                 all_possible_relations = set(
                     [
@@ -518,9 +518,9 @@ class CellDecoder(nn.Module):
             relation_labels = torch.tensor(relations[b]["label"], device=device)
             entities_start_index = torch.tensor(entities[b]["start"], device=device)
             entities_end_index = torch.tensor(entities[b]["end"], device=device)
-            # 
-            entities_group_index = torch.tensor(entities[b]["group_id"], device=device)
-            entities_index_index = torch.tensor(entities[b]["index_id"], device=device)
+            # ,"column_id":[0, 0],"row_id":[0, 0]
+            entities_group_index = torch.tensor(entities[b]["column_id"], device=device)
+            entities_index_index = torch.tensor(entities[b]["row_id"], device=device)
             if self.multi_task:
                 entities_labels = torch.tensor(entities[b]["label"], device=device)
             else:

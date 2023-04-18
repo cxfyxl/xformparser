@@ -72,8 +72,8 @@ class XFUN(datasets.GeneratorBasedBuilder):
                             "end": datasets.Value("int64"),
                             "label": datasets.ClassLabel(names=["HEADER", "QUESTION", "ANSWER", "SINGLE", "ANSWERNUM"]),
                             "id":datasets.Value(dtype='string'),
-                            "group_id":datasets.Value("int64"),
-                            "index_id":datasets.Value("int64"),
+                            "row_id":datasets.Value("int64"),
+                            "column_id":datasets.Value("int64"),
                             # "pred_label": datasets.ClassLabel(names=["HEADER", "QUESTION", "ANSWER", "SINGLE", "ANSWERNUM"]),
                         }
                     ),
@@ -137,7 +137,7 @@ class XFUN(datasets.GeneratorBasedBuilder):
         ]
 
 
-    def get_boxes(self, boxes_tmp,compute_func,ratio):
+    def get_boxes(self, boxes_tmp):
         groups = []
         group = []
         min_y = 30000
@@ -188,8 +188,8 @@ class XFUN(datasets.GeneratorBasedBuilder):
     def get_groups_from_boxes(self,boxes_tmp):
         # print("get_groups_from_boxes")
         if len(boxes_tmp) == 0:
-            return []
-        groups,x_index, y_index = self.get_boxes(boxes_tmp,compute_y_overlap,70)
+            return [],[],[]
+        groups,x_index, y_index = self.get_boxes(boxes_tmp)
         # groups 外部排序
         groups = sorted(groups, key=lambda x: (x[0][1],x[0][0]))
             # groups 内部排序
@@ -202,7 +202,7 @@ class XFUN(datasets.GeneratorBasedBuilder):
             new_groups.append(groups[j][1])
             j+=1
             
-        return new_groups
+        return new_groups,x_index,y_index
 
 
     def get_groups(self, MODE, doc, tables, size):
@@ -219,6 +219,8 @@ class XFUN(datasets.GeneratorBasedBuilder):
         group_id = 0
 
         group_src_new = []
+        x_index_src_new = []
+        y_index_src_new = []
         
         for table_id, table in enumerate(tables):
             group_src = []
@@ -237,7 +239,7 @@ class XFUN(datasets.GeneratorBasedBuilder):
 
             boxes = sorted(boxes, key=lambda x: x[0])
             boxes_tmp = deepcopy(boxes)
-            groups = self.get_groups_from_boxes(boxes_tmp)
+            groups,x_index,y_index = self.get_groups_from_boxes(boxes_tmp)
             # 行检测
             boxes = []
             for group in groups:
@@ -249,6 +251,8 @@ class XFUN(datasets.GeneratorBasedBuilder):
                 group_id += 1
             boxes_src.extend(boxes)
             group_src_new.append(group_src)
+            x_index_src_new.append(x_index)
+            y_index_src_new.append(y_index)
         
         group_src = []     
         boxes = []
@@ -259,7 +263,7 @@ class XFUN(datasets.GeneratorBasedBuilder):
             boxes.append((bbox[1], bbox, line))
             i+=1
         boxes = sorted(boxes, key=lambda x: x[0])
-        groups = self.get_groups_from_boxes(boxes)
+        groups,x_index,y_index = self.get_groups_from_boxes(boxes)
         
         boxes = []
         for group in groups:
@@ -271,9 +275,12 @@ class XFUN(datasets.GeneratorBasedBuilder):
         boxes_src.extend(boxes)
         if len(group_src) > 0:
             group_src_new.append(group_src)
+            x_index_src_new.append(x_index)
+            y_index_src_new.append(y_index)
         # assert len(doc_tp) == insert_num
         # print("get_groups end")
-        return group_src_new
+        return group_src_new,x_index_src_new,y_index_src_new
+
     
     def get_relations(self, relations,id2label,entity_id_to_index_map,entities):
         # print("get_relation")
@@ -329,7 +336,7 @@ class XFUN(datasets.GeneratorBasedBuilder):
     
     
     
-    def get_docs(self, group_src, size):
+    def get_docs(self, group_src, size, x_index,y_index):
         group_doc_src = []
         entity_id_to_index_map = {}
         id2label = {}
@@ -366,6 +373,10 @@ class XFUN(datasets.GeneratorBasedBuilder):
                                 "end": len(group_doc["input_ids"]) + len(tokenized_inputs["input_ids"]),
                                 "id": line["id"],
                                 "linking": line["linking"],
+                                "row_begin_id":y_index[line["box"][1]],
+                                "row_end_id":y_index[line["box"][3]],
+                                "column_begin_id":x_index[line["box"][0]],
+                                "column_end_id":x_index[line["box"][2]],  
                                 "label": line["label"].upper(),
                             }
                     )
@@ -395,10 +406,12 @@ class XFUN(datasets.GeneratorBasedBuilder):
             entities = []
             relations = []
             group_id = 0
+            row_index = set()
             while i < len(group_doc_src):
                 group_len, group_entities, group_doc = group_doc_src[i]
-
-                    
+                
+                column_index = set()
+                row_dict,column_dict = {},{}
                 if group_len + len(tokenized_doc['input_ids']) <= maxsteps:
                     pre = len(tokenized_doc["input_ids"])
                     pre_index = len(entities)
@@ -409,10 +422,24 @@ class XFUN(datasets.GeneratorBasedBuilder):
                         group_entity["end"] = group_entity["end"] + pre
                         entity_id_to_index_map[group_entity["id"]] = pre_index + n
                         group_entity["id"] = pre_index + n
-                        group_entity["group_id"] = group_id
-                        group_entity["index_id"] = n
+                        group_entity["row_id"] = group_id
+                        group_entity["column_id"] = n
+                        row_begin_id,row_end_id,column_begin_id,column_end_id = \
+                            group_entity["row_begin_id"], group_entity["row_end_id"], \
+                            group_entity["column_begin_id"], group_entity["column_end_id"]
+                        row_index.add(row_begin_id)
+                        column_index.add(column_begin_id)
                         relations.extend([tuple(sorted(l)) for l in group_entity["linking"]])
                     
+                    column_index = list(column_index)
+                    column_index.sort()
+                    column_dict = {k:v for k,v in zip(column_index,list(range(0, len(column_index), 1)))}
+ 
+                    for n, group_entity in enumerate(group_entities):
+                        row_begin_id,row_end_id,column_begin_id,column_end_id = \
+                            group_entity["row_begin_id"], group_entity["row_end_id"], \
+                            group_entity["column_begin_id"], group_entity["column_end_id"]
+                        # group_entity["column_id"] = column_dict[column_begin_id]
                     group_id +=1
                     entities.extend(group_entities)
                     group_doc_src.pop(i)
@@ -423,6 +450,19 @@ class XFUN(datasets.GeneratorBasedBuilder):
                     group_id = 0
                     break
                 i+=1
+            
+            row_index = list(row_index)
+            row_index.sort()
+            row_dict = {k:v for k,v in zip(row_index,list(range(0, len(row_index), 1)))}
+            for n, group_entity in enumerate(entities):
+                row_begin_id = group_entity["row_begin_id"]
+                del group_entity["column_begin_id"]
+                del group_entity["column_end_id"]
+                del group_entity["row_begin_id"]
+                del group_entity["row_end_id"]
+                # group_entity["row_id"] = row_dict[row_begin_id]
+                
+            
             entity_id_to_index_map_src.append(entity_id_to_index_map)
             entities_src.append(entities)
             tokenized_doc_src.append(tokenized_doc)
@@ -458,10 +498,11 @@ class XFUN(datasets.GeneratorBasedBuilder):
                     # continue
                 tables = ocr_data[id][0]['tables']
                 image, size = load_image(doc["img"]["fpath"])
-                group_src_new  = self.get_groups(MODE, doc, tables, size)
+                group_src_new,x_index_src_new,y_index_src_new  = self.get_groups(MODE, doc, tables, size)
                 index_n = -1
-                for group_src in group_src_new:
-                    tokenized_doc_src, entities_src, entity_id_to_index_map_src, relations_src= self.get_docs(group_src, size)
+                for group_n,group_src in enumerate(group_src_new):
+                    x_index,y_index = x_index_src_new[group_n],y_index_src_new[group_n]
+                    tokenized_doc_src, entities_src, entity_id_to_index_map_src, relations_src= self.get_docs(group_src, size,x_index,y_index)
                     
                     # relations = [rel for rel in relations if rel[0] not in empty_entity and rel[1] not in empty_entity]
                     

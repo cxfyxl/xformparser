@@ -1250,8 +1250,8 @@ class LayoutLMv2ForJointCellClassification(LayoutLMv2PreTrainedModel):
             
             entities_start_index = torch.tensor(entities[b]["start"],device=device).type(torch.long)
             entities_end_index = torch.tensor(entities[b]["end"], device=device).type(torch.long)
-            entities_group_index = torch.tensor(entities[b]["group_id"], device=device)
-            entities_index_index = torch.tensor(entities[b]["index_id"], device=device)
+            entities_group_index = torch.tensor(entities[b]["row_id"], device=device)
+            entities_index_index = torch.tensor(entities[b]["column_id"], device=device)
             entity_repr = None
             for i in enumerate(entities_start_index):
                 index = i[0]

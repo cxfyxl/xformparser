@@ -5,6 +5,13 @@ from detectron2.data.transforms import ResizeTransform, TransformList
 from PIL import Image
 import os
 
+def get_overlap_byrelative(group_box,bbox,index):
+    l_begin,l_end = index[group_box[1]], index[group_box[3]]
+    r_begin,r_end = index[bbox[1]], index[bbox[3]]
+    if l_begin >= r_end or l_end <= r_begin:
+        return False
+    else:
+        return True
 
 def group_by_threshold(lst, threshold):
     lst.sort()

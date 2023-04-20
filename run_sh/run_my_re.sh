@@ -1,4 +1,5 @@
-WANDB_PROJECT="my-testdata-re"
+# WANDB_PROJECT="my-testdata-re"
+# WANDB_DISABLED=true
 WANDB_NAME="$3"
 CUDA_VISIBLE_DEVICES=$1 python -m torch.distributed.launch --master_port $2 --nproc_per_node=1 examples/run_myxfun_re.py \
         --overwrite_output_dir \

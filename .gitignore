@@ -21,7 +21,8 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.pyc
-
+layoutlmft/models/layoutlmv2/__pycache__/modeling_layoutlmv2.cpython-37.pyc
+layoutlmft/data/__pycache__/utils.cpython-37.pyc
 
 
 ### macOS ###

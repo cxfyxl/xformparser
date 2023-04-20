@@ -25,15 +25,15 @@ from transformers import (
     set_seed,
 )
 from transformers.trainer_utils import get_last_checkpoint, is_main_process
-import wandb
-# set the wandb project where this run will be logged
-os.environ["WANDB_PROJECT"]="my-testdata-re"
+# import wandb
+# # set the wandb project where this run will be logged
+# os.environ["WANDB_PROJECT"]="my-testdata-re"
 
-# save your trained model checkpoint to wandb
-os.environ["WANDB_LOG_MODEL"]="true"
+# # save your trained model checkpoint to wandb
+# os.environ["WANDB_LOG_MODEL"]="true"
 
-# turn off watch to log faster
-os.environ["WANDB_WATCH"]="false"
+# # turn off watch to log faster
+# os.environ["WANDB_WATCH"]="false"
 logger = logging.getLogger(__name__)
 
 
@@ -268,7 +268,7 @@ def main():
         output_test_predictions_file = os.path.join(training_args.output_dir,"_data_test_predictions_re.json")
         with open(output_test_predictions_file, 'w') as f:
             json.dump({'pred':predictions, 'label': labels}, f)
-    wandb.finish()
+    # wandb.finish()
 
 
 def _mp_fn(index):

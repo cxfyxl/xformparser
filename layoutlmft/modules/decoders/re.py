@@ -111,14 +111,14 @@ class REDecoder(nn.Module):
         self.angle_dim = config.hidden_size // 2
         self.group_dim = config.hidden_size // 4
         self.use_angle = False
-        self.use_specialid = True
+        self.use_specialid = False
         self.del_begin = 0
         self.del_end = 50
         self.mlp_dim = config.hidden_size * 2   # + config.hidden_size
         self.use_del = True
         self.entity_emb = nn.Embedding(5, config.hidden_size, scale_grad_by_freq=True)
-        self.group_emb = nn.Embedding(35, config.hidden_size // 4, scale_grad_by_freq=True)
-        self.index_emb= nn.Embedding(35, config.hidden_size // 4, scale_grad_by_freq=True)
+        self.group_emb = nn.Embedding(30, config.hidden_size // 4, scale_grad_by_freq=True)
+        self.index_emb= nn.Embedding(30, config.hidden_size // 4, scale_grad_by_freq=True)
         self.angle_embedding = nn.Embedding(8,self.angle_dim, scale_grad_by_freq=True)
 
         if self.use_specialid:
@@ -378,8 +378,8 @@ class CellDecoder(nn.Module):
         self.log_var_re = torch.nn.Parameter(torch.zeros((1,), requires_grad=True))
         self.entity_emb = nn.Embedding(5, config.hidden_size, scale_grad_by_freq=True)
         self.group_dim = config.hidden_size // 2
-        self.group_emb = nn.Embedding(35, self.group_dim, scale_grad_by_freq=True)
-        self.index_emb= nn.Embedding(35, self.group_dim, scale_grad_by_freq=True)
+        self.group_emb = nn.Embedding(50, self.group_dim, scale_grad_by_freq=True)
+        self.index_emb= nn.Embedding(50, self.group_dim, scale_grad_by_freq=True)
         # self.entity_emb_rand = nn.Embedding(5, config.hidden_size, scale_grad_by_freq=True)
         self.use_specialid = True
         if self.use_specialid:

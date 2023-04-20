@@ -181,11 +181,23 @@ def main():
     # Preprocessing the dataset
     # Padding strategy
     padding = "max_length" if data_args.pad_to_max_length else False
-
+    train_mode = "sorted"
+    print(f"train_mode:{train_mode}")
     if training_args.do_train:
         if "train" not in datasets:
             raise ValueError("--do_train requires a train dataset")
-        train_dataset = datasets["train"].shuffle(seed=training_args.seed)# .sort("len",reverse=True)
+        if train_mode == "shuffle":
+            train_dataset = datasets["train"].shuffle(seed=training_args.seed)# .sort("len",reverse=True)
+            print(f"train_mode:{train_mode}")
+        elif train_mode == "sorted":
+            train_dataset = datasets["train"].sort("len")
+            print(f"train_mode:{train_mode}")
+        elif train_mode == "reverse":
+            train_dataset = datasets["train"].sort("len",reverse=True)
+            print(f"train_mode:{train_mode}")
+        else:
+            train_dataset = datasets["train"]
+            print(f"train_mode:{train_mode}")
         if data_args.max_train_samples is not None:
             train_dataset = train_dataset.select(range(data_args.max_train_samples))
 

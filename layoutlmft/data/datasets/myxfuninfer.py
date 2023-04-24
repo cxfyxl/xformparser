@@ -423,7 +423,7 @@ class XFUN(datasets.GeneratorBasedBuilder):
                         group_entity["end"] = group_entity["end"] + pre
                         entity_id_to_index_map[group_entity["id"]] = pre_index + n
                         group_entity["id"] = pre_index + n
-                        group_entity["row_id"] = group_id
+                        # group_entity["row_id"] = group_id
                         # group_entity["column_id"] = n
                         row_begin_id,row_end_id,column_begin_id,column_end_id = \
                             group_entity["row_begin_id"], group_entity["row_end_id"], \
@@ -461,7 +461,7 @@ class XFUN(datasets.GeneratorBasedBuilder):
                 del group_entity["column_end_id"]
                 del group_entity["row_begin_id"]
                 del group_entity["row_end_id"]
-                # group_entity["row_id"] = row_dict[row_begin_id]
+                group_entity["row_id"] = row_dict[row_begin_id]
                 
             
             entity_id_to_index_map_src.append(entity_id_to_index_map)

@@ -181,7 +181,7 @@ def main():
     # Preprocessing the dataset
     # Padding strategy
     padding = "max_length" if data_args.pad_to_max_length else False
-    train_mode = "sorted"
+    train_mode = "base"
     print(f"train_mode:{train_mode}")
     if training_args.do_train:
         if "train" not in datasets:

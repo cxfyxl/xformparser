@@ -381,7 +381,7 @@ class CellDecoder(nn.Module):
         self.group_emb = nn.Embedding(50, self.group_dim, scale_grad_by_freq=True)
         self.index_emb= nn.Embedding(50, self.group_dim, scale_grad_by_freq=True)
         # self.entity_emb_rand = nn.Embedding(5, config.hidden_size, scale_grad_by_freq=True)
-        self.use_specialid = True
+        self.use_specialid = False
         if self.use_specialid:
             self.mlp_dim = config.hidden_size * 2 + 2 * self.group_dim
         else:

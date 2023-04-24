@@ -465,9 +465,13 @@ class XFUN(datasets.GeneratorBasedBuilder):
                 del group_entity["row_begin_id"]
                 del group_entity["row_end_id"]
                 group_entity["row_id"] = row_dict[row_begin_id]
+                
                 self.row_id_max = max(group_entity["row_id"], self.row_id_max)
                 self.column_id_max = max(group_entity["column_id"],self.column_id_max)
                 
+            for n, group_entity in enumerate(entities):
+                group_entity["row_id"] = map_interval(0,self.row_id_max,0,49,group_entity["row_id"])
+                group_entity["column_id"] = map_interval(0,self.column_id_max,0,49,group_entity["column_id"])
             
             entity_id_to_index_map_src.append(entity_id_to_index_map)
             entities_src.append(entities)

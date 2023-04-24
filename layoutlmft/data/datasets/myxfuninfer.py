@@ -376,9 +376,9 @@ class XFUN(datasets.GeneratorBasedBuilder):
                                 "row_begin_id":y_index[line["box"][1]],
                                 "row_end_id":y_index[line["box"][3]],
                                 "column_begin_id":x_index[line["box"][0]],
-                                "column_end_id":x_index[line["box"][2]],
-                                "pred_label": line["pred_label"].upper(),
+                                "column_end_id":x_index[line["box"][2]],  
                                 "label": line["label"].upper(),
+                                "pred_label": line["pred_label"].upper(),
                             }
                     )
                 for j in group_doc:
@@ -424,6 +424,7 @@ class XFUN(datasets.GeneratorBasedBuilder):
                         entity_id_to_index_map[group_entity["id"]] = pre_index + n
                         group_entity["id"] = pre_index + n
                         # group_entity["row_id"] = group_id
+                        # self.row_id_max = max(group_entity["row_id"], self.row_id_max)
                         # group_entity["column_id"] = n
                         row_begin_id,row_end_id,column_begin_id,column_end_id = \
                             group_entity["row_begin_id"], group_entity["row_end_id"], \
@@ -441,6 +442,7 @@ class XFUN(datasets.GeneratorBasedBuilder):
                             group_entity["row_begin_id"], group_entity["row_end_id"], \
                             group_entity["column_begin_id"], group_entity["column_end_id"]
                         group_entity["column_id"] = column_dict[column_begin_id]
+                        
                     group_id +=1
                     entities.extend(group_entities)
                     group_doc_src.pop(i)
@@ -463,6 +465,12 @@ class XFUN(datasets.GeneratorBasedBuilder):
                 del group_entity["row_end_id"]
                 group_entity["row_id"] = row_dict[row_begin_id]
                 
+                self.row_id_max = max(group_entity["row_id"], self.row_id_max)
+                self.column_id_max = max(group_entity["column_id"],self.column_id_max)
+                
+            for n, group_entity in enumerate(entities):
+                group_entity["row_id"] = map_interval(0,self.row_id_max,0,49,group_entity["row_id"])
+                group_entity["column_id"] = map_interval(0,self.column_id_max,0,49,group_entity["column_id"])
             
             entity_id_to_index_map_src.append(entity_id_to_index_map)
             entities_src.append(entities)
@@ -524,5 +532,5 @@ class XFUN(datasets.GeneratorBasedBuilder):
                                 "relations": relations,
                             })
                         print(f"{doc['id']}_{index_n}",len(item['input_ids']))
+                        print(f"self.row_id_max:{self.row_id_max};self.column_id_max:{self.column_id_max}")
                         yield f"{doc['id']}_{index_n}", item
-                        

@@ -117,8 +117,8 @@ class REDecoder(nn.Module):
         self.mlp_dim = config.hidden_size * 2   # + config.hidden_size
         self.use_del = True
         self.entity_emb = nn.Embedding(5, config.hidden_size, scale_grad_by_freq=True)
-        self.group_emb = nn.Embedding(35, config.hidden_size // 4, scale_grad_by_freq=True)
-        self.index_emb= nn.Embedding(35, config.hidden_size // 4, scale_grad_by_freq=True)
+        self.group_emb = nn.Embedding(50, config.hidden_size // 4, scale_grad_by_freq=True)
+        self.index_emb= nn.Embedding(50, config.hidden_size // 4, scale_grad_by_freq=True)
         self.angle_embedding = nn.Embedding(8,self.angle_dim, scale_grad_by_freq=True)
 
         if self.use_specialid:

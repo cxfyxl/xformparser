@@ -131,8 +131,9 @@ class PositionalEncoding(nn.Module):
         return x # size = [batch, L, d_model]
 
 class REEmbeddings(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config, use_special = False):
         super().__init__()
+        self.use_special = use_special
         self.label_embedding = nn.Embedding(5, config.hidden_size, scale_grad_by_freq=True)
         self.row_embeddding = nn.Embedding(50, config.hidden_size, scale_grad_by_freq=True)
         self.column_embeddding = nn.Embedding(50, config.hidden_size, scale_grad_by_freq=True)
@@ -142,9 +143,13 @@ class REEmbeddings(nn.Module):
         
     def forward(self, label,row_id,column_id):
         label_embedding = self.label_embedding(label)
-        row_embeddding = self.row_embeddding(row_id)
-        column_embeddding = self.column_embeddding(column_id)
-        final_embedings = label_embedding # + row_embeddding + column_embeddding
+        if self.use_special:
+            print("self.use_special in REEmbeddings")
+            row_embeddding = self.row_embeddding(row_id)
+            column_embeddding = self.column_embeddding(column_id)
+            final_embedings = label_embedding + row_embeddding + column_embeddding
+        else:
+            final_embedings = label_embedding
         final_embedings = self.dropout(final_embedings)
         return final_embedings
 
@@ -191,7 +196,7 @@ class REDecoder(nn.Module):
         self.angle_dim = config.hidden_size // 2
         self.group_dim = config.hidden_size // 4
         self.use_angle = False
-        self.use_specialid = True
+        self.use_specialid = False
         self.del_begin = 0
         self.del_end = 50
         self.mlp_dim = config.hidden_size * 2   # + config.hidden_size

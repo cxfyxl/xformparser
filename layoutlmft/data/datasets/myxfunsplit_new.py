@@ -546,5 +546,6 @@ class XFUN(datasets.GeneratorBasedBuilder):
                             })
                         print(f"{doc['id']}_{index_n}",len(item['input_ids']))
                         print(f"self.row_id_max:{self.row_id_max};self.column_id_max:{self.column_id_max}")
+                        print(f"self.row_id_max:{self.group_id_max};self.column_id_max:{self.index_id_max}")
                         yield f"{doc['id']}_{index_n}", item
                         

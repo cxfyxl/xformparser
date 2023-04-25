@@ -105,6 +105,86 @@ class MyBiaffineAttention(torch.nn.Module):
         self.trilinear_2.reset_parameters()
         self.linear.reset_parameters()
 
+import torch
+
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model, max_len=5000):
+        """
+        :param d_model: pe编码维度，一般与word embedding相同，方便相加
+        :param dropout: dorp out
+        :param max_len: 语料库中最长句子的长度，即word embedding中的L
+        """
+        super(PositionalEncoding, self).__init__()
+        # 计算pe编码
+        pe = torch.zeros(max_len, d_model) # 建立空表，每行代表一个词的位置，每列代表一个编码位
+        position = torch.arange(0, max_len).unsqueeze(1) # 建个arrange表示词的位置以便公式计算，size=(max_len,1)
+        div_term = torch.exp(torch.arange(0, d_model, 2) *    # 计算公式中10000**（2i/d_model)
+                             -(math.log(10000.0) / d_model))
+        pe[:, 0::2] = torch.sin(position * div_term)  # 计算偶数维度的pe值
+        pe[:, 1::2] = torch.cos(position * div_term)  # 计算奇数维度的pe值
+        pe = pe.unsqueeze(0)  # size=(1, L, d_model)，为了后续与word_embedding相加,意为batch维度下的操作相同
+        self.register_buffer('pe', pe)  # pe值是不参加训练的
+
+    def forward(self, x):
+        # 输入的最终编码 = word_embedding + positional_embedding
+        x = x + nn.Variable(self.pe[:, :x.size(1)],requires_grad=False) #size = [batch, L, d_model]
+        return x # size = [batch, L, d_model]
+
+class REEmbeddings(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.label_embedding = nn.Embedding(5, config.hidden_size, scale_grad_by_freq=True)
+        self.row_embeddding = nn.Embedding(35, config.hidden_size, scale_grad_by_freq=True)
+        self.column_embeddding = nn.Embedding(35, config.hidden_size, scale_grad_by_freq=True)
+        self.positionalembedding = PositionalEncoding(config.hidden_size,35)
+        self.dim = config.hidden_size
+        self.dropout = nn.Dropout(config.hidden_dropout_prob)
+        
+    def forward(self, label,row_id,column_id):
+        label_embedding = self.label_embedding(label)
+        row_embeddding = self.row_embeddding(row_id)
+        column_embeddding = self.column_embeddding(column_id)
+        final_embedings = label_embedding # + row_embeddding + column_embeddding
+        final_embedings = self.dropout(final_embedings)
+        return final_embedings
+
+
+class EntityData():
+    def __init__(self, entity, device):
+        self.entities_start_index = torch.tensor(entity["start"], device=device)
+        self.entities_end_index = torch.tensor(entity["end"], device=device)
+        self.entities_row_index = torch.tensor(entity["row_id"], device=device)
+        self.entities_column_index = torch.tensor(entity["column_id"], device=device)
+        self.entities_group_index = torch.tensor(entity["group_id"], device=device)
+        self.entities_index_index = torch.tensor(entity["index_id"], device=device)
+        if "pred_label" in entity.keys():
+            self.entities_labels = torch.tensor(entity["pred_label"], device=device)
+        else:
+            self.entities_labels = torch.tensor(entity["label"], device=device)
+        
+        
+    def entity_cell_forward(self, hidden_states, b, head_entities):
+        batch_size, max_n_words, context_dim = hidden_states.size()
+        head_start_index = self.entities_start_index[head_entities]
+        head_end_index = self.entities_end_index[head_entities]
+        head_label = self.entities_labels[head_entities]
+        
+        head_row_id = self.entities_row_index[head_entities]
+        head_column_id = self.entities_column_index[head_entities]
+        
+        head_group_id = self.entities_group_index[head_entities]
+        head_index_id = self.entities_index_index[head_entities]
+        # if entities_labels_logits != None:
+        #     head_logits = entities_labels_logits[head_entities]
+        head_entity_repr = None
+        for i in enumerate(head_start_index):
+            index = i[0]
+            start_index, end_index = head_start_index[index], head_end_index[index]
+            temp_repr = hidden_states[b][start_index:end_index].mean(dim=0).view(1,context_dim)
+            # temp_repr = hidden_states[b][start_index:end_index].max(dim=0)[0].view(1,context_dim)
+            head_entity_repr = temp_repr if head_entity_repr == None else torch.cat([head_entity_repr,temp_repr], dim=0)
+        return head_row_id, head_column_id, head_group_id, head_index_id, head_label, head_entity_repr
+
 class REDecoder(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -116,13 +196,15 @@ class REDecoder(nn.Module):
         self.del_end = 50
         self.mlp_dim = config.hidden_size * 2   # + config.hidden_size
         self.use_del = True
-        self.entity_emb = nn.Embedding(5, config.hidden_size, scale_grad_by_freq=True)
-        self.group_emb = nn.Embedding(50, config.hidden_size // 4, scale_grad_by_freq=True)
-        self.index_emb= nn.Embedding(50, config.hidden_size // 4, scale_grad_by_freq=True)
+        # self.entity_emb = nn.Embedding(5, config.hidden_size, scale_grad_by_freq=True)
+        # self.group_emb = nn.Embedding(50, config.hidden_size // 4, scale_grad_by_freq=True)
+        # self.index_emb= nn.Embedding(50, config.hidden_size // 4, scale_grad_by_freq=True)
+        self.re_embedding = REEmbeddings(config)
         self.angle_embedding = nn.Embedding(8,self.angle_dim, scale_grad_by_freq=True)
 
-        if self.use_specialid:
-            self.mlp_dim += self.group_dim * 2
+        # if self.use_specialid:
+        #     self.mlp_dim += self.group_dim * 2
+        
         projection = nn.Sequential(
             nn.Linear(self.mlp_dim, self.mlp_dim // 2),
             nn.ReLU(),
@@ -144,6 +226,7 @@ class REDecoder(nn.Module):
 
         print(f"self.use_specialid:{self.use_specialid},self.group_emb:{self.group_dim}")
         print(f"self.del_begin:{self.del_begin},self.del_end:{self.del_end},self.use_del:{self.use_del}")
+
 
     def build_seq(self,relations,entities,b,key):
         # ReDocoder
@@ -202,7 +285,9 @@ class REDecoder(nn.Module):
         gt_relations = []
         for b in range(batch_size):
             if len(entities[b]["start"]) <= 2:
-                entities[b] = {"end": [1, 1], "label": [0, 0], "start": [0, 0],"column_id":[0, 0],"row_id":[0, 0]}
+                entities[b] = {"end": [1, 1], "label": [0, 0], "start": [0, 0],\
+                    "group_id":[0, 0],"index_id":[0, 0], \
+                    "column_id":[0, 0],"row_id":[0, 0]}
             if "pred_label" not in entities[b].keys():
                 relation_per_doc = self.build_seq(relations,entities,b,"label")
             else:
@@ -232,7 +317,9 @@ class REDecoder(nn.Module):
             pred_relations.append(rel)
         return pred_relations
 
-    def entity_cell_forward(self, hidden_states, b, entities_start_index, entities_end_index, entities_labels,head_entities, \
+    def entity_cell_forward(self, hidden_states, b, entities_start_index, \
+                            entities_end_index, entities_labels,head_entities, \
+                            entities_row_index, entities_column_index, \
                             entities_group_index,entities_index_index):
         batch_size, max_n_words, context_dim = hidden_states.size()
         head_start_index = entities_start_index[head_entities]
@@ -240,6 +327,8 @@ class REDecoder(nn.Module):
         head_label = entities_labels[head_entities]
         head_group_id = entities_group_index[head_entities]
         head_index_id = entities_index_index[head_entities]
+        head_row_id = entities_row_index[head_entities]
+        head_column_id = entities_column_index[head_entities]
         # if entities_labels_logits != None:
         #     head_logits = entities_labels_logits[head_entities]
         head_entity_repr = None
@@ -249,7 +338,7 @@ class REDecoder(nn.Module):
             temp_repr = hidden_states[b][start_index:end_index].mean(dim=0).view(1,context_dim)
             # temp_repr = hidden_states[b][start_index:end_index].max(dim=0)[0].view(1,context_dim)
             head_entity_repr = temp_repr if head_entity_repr == None else torch.cat([head_entity_repr,temp_repr], dim=0)
-        return head_group_id, head_index_id, head_label, head_entity_repr
+        return head_row_id, head_column_id, head_group_id, head_index_id, head_label, head_entity_repr
 
    
     def get_angle(self, x1, y1, x2, y2):
@@ -302,57 +391,38 @@ class REDecoder(nn.Module):
         loss = 0
         all_pred_relations = []
         for b in range(batch_size):
+            
             head_entities = torch.tensor(relations[b]["head"], device=device)
             tail_entities = torch.tensor(relations[b]["tail"], device=device)
+            
             relation_labels = torch.tensor(relations[b]["label"], device=device)
-            entities_start_index = torch.tensor(entities[b]["start"], device=device)
-            entities_end_index = torch.tensor(entities[b]["end"], device=device)
-            entities_group_index = torch.tensor(entities[b]["row_id"], device=device)
-            entities_index_index = torch.tensor(entities[b]["column_id"], device=device)
-            entities_bbox = torch.tensor(bbox[b], device=device)
-            head_bbox_x,head_bbox_y = entities_bbox[head_entities][:,1],entities_bbox[head_entities][:,2]
-            tail_bbox_x,tail_bbox_y = entities_bbox[tail_entities][:,1],entities_bbox[tail_entities][:,2]
-            entity_angle = self.get_angle(head_bbox_x,head_bbox_y,tail_bbox_x,tail_bbox_y)
-            if "pred_label" in entities[b].keys():
-                entities_labels = torch.tensor(entities[b]["pred_label"], device=device)
-            else:
-                entities_labels = torch.tensor(entities[b]["label"], device=device)
+            entitydata = EntityData(entities[b],device)
+            if self.use_angle:
+                entities_bbox = torch.tensor(bbox[b], device=device)
+                head_bbox_x,head_bbox_y = entities_bbox[head_entities][:,1],entities_bbox[head_entities][:,2]
+                tail_bbox_x,tail_bbox_y = entities_bbox[tail_entities][:,1],entities_bbox[tail_entities][:,2]
+                entity_angle = self.get_angle(head_bbox_x,head_bbox_y,tail_bbox_x,tail_bbox_y)
+        
             entities_labels_logits = None
             
-            # if "label_logits" in entities[b].keys():
-            #     entities_labels_logits = torch.tensor(entities[b]["label_logits"], device=device)
+            head_row_id, head_column_id, head_group_id, head_index_id, \
+                head_label, head_entity_repr = entitydata.entity_cell_forward(hidden_states,b,head_entities)
+                
+            tail_row_id, tail_column_id, tail_group_id, tail_index_id, \
+                tail_label, tail_entity_repr = entitydata.entity_cell_forward(hidden_states,b,tail_entities)
 
-            head_group_id, head_index_id, head_label, head_entity_repr = self.entity_cell_forward(hidden_states, b, entities_start_index, \
-                                                   entities_end_index, entities_labels , head_entities,entities_group_index,entities_index_index)
 
-            tail_group_id, tail_index_id, tail_label, tail_entity_repr = self.entity_cell_forward(hidden_states, b, entities_start_index, \
-                                        entities_end_index, entities_labels , tail_entities,entities_group_index,entities_index_index)
-            head_label_repr = self.entity_emb(head_label)
-            tail_label_repr = self.entity_emb(tail_label)
+            head_label_repr = self.re_embedding(head_label,head_row_id,head_column_id)
+            tail_label_repr = self.re_embedding(tail_label,tail_row_id,tail_column_id)
 
-            # head_repr, tail_repr = head_entity_repr, tail_entity_repr
-            # head_repr = head_entity_repr
-            # tail_repr = tail_entity_repr
-            if not self.use_specialid:
-                head_repr = torch.cat(
+            head_repr = torch.cat(
                     (head_entity_repr, head_label_repr),
                     dim=-1,
-                )
-                tail_repr = torch.cat(
+             )
+            tail_repr = torch.cat(
                     (tail_entity_repr, tail_label_repr),
                     dim=-1,
-                )
-            else:
-                head_group_repr,head_index_repr = self.group_emb(head_group_id), self.index_emb(head_index_id)
-                tail_group_repr,tail_index_repr = self.group_emb(tail_group_id), self.index_emb(tail_index_id)
-                head_repr = torch.cat(
-                    (head_entity_repr, head_label_repr,head_group_repr,head_index_repr),
-                    dim=-1,
-                )
-                tail_repr = torch.cat(
-                    (tail_entity_repr, tail_label_repr,tail_group_repr,tail_index_repr),
-                    dim=-1,
-                )
+            )
             heads = self.ffnn_head(head_repr)
             tails = self.ffnn_tail(tail_repr)
             if not self.use_angle:

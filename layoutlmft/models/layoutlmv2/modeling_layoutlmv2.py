@@ -1119,13 +1119,42 @@ class LayoutLMv2ForCellClassification(LayoutLMv2PreTrainedModel):
 
 
 
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model, height, width):
+        super().__init__()
+        self.height = height
+        self.width = width
+        self.pos_embedding = nn.Parameter(self._get_embedding(d_model, height, width))
 
+    def _get_embedding(self, d_model, height, width):
+        pos_h = torch.arange(height).unsqueeze(1).float()
+        pos_w = torch.arange(width).unsqueeze(0).float()
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+
+        pos_h_embed = torch.sin(pos_h * div_term)
+        pos_w_embed = torch.cos(pos_w * div_term)
+
+        pos_embed = torch.zeros(height, width, d_model)
+        pos_embed[:, :, 0::2] = pos_h_embed.unsqueeze(2).repeat(1, 1, width // 2)
+        pos_embed[:, :, 1::2] = pos_w_embed.unsqueeze(2).repeat(1, 1, height // 2).transpose(1, 2)
+
+        return pos_embed.view(1, height * width, d_model)
+
+    def forward(self, x):
+        batch_size, _, height, width = x.size()
+        pos_embedding = self.pos_embedding.repeat(batch_size, 1, 1)
+        x = x.view(batch_size, -1, height * width)
+        x = x + pos_embedding
+        x = x.view(batch_size, -1, height, width)
+        return x
+    
+    
 class LayoutLMv2ForRelationExtraction(LayoutLMv2PreTrainedModel):
     def __init__(self, config):
         super().__init__(config)
         self.layoutlmv2 = LayoutLMv2Model(config)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
-        self.lstm_layer = nn.LSTM(config.hidden_size, config.hidden_size // 2, 1, batch_first=True, bidirectional=True)
+        # self.lstm_layer = nn.LSTM(config.hidden_size, config.hidden_size // 2, 1, batch_first=True, bidirectional=True)
         self.extractor = REDecoder(config)
         self.init_weights()
 

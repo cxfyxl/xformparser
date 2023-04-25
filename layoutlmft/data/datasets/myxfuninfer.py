@@ -37,7 +37,8 @@ class XFUNConfig(datasets.BuilderConfig):
 
 class XFUN(datasets.GeneratorBasedBuilder):
     """XFUN dataset."""
-
+    row_id_max = -1
+    column_id_max = -1
     BUILDER_CONFIGS = [XFUNConfig(name=f"myxfuninfer.{lang}", lang=lang) for lang in _LANG]
     ocr_data = {}
     input_ocr = ["/home/zhanghang-s21/data/bishe/ocr_data/aistrong_ocr_train", \
@@ -74,6 +75,8 @@ class XFUN(datasets.GeneratorBasedBuilder):
                             "id":datasets.Value(dtype='string'),
                             "row_id":datasets.Value("int64"),
                             "column_id":datasets.Value("int64"),
+                            "group_id":datasets.Value("int64"),
+                            "index_id":datasets.Value("int64"),
                             "pred_label": datasets.ClassLabel(names=["HEADER", "QUESTION", "ANSWER", "SINGLE", "ANSWERNUM"]),
                         }
                     ),
@@ -423,9 +426,9 @@ class XFUN(datasets.GeneratorBasedBuilder):
                         group_entity["end"] = group_entity["end"] + pre
                         entity_id_to_index_map[group_entity["id"]] = pre_index + n
                         group_entity["id"] = pre_index + n
-                        # group_entity["row_id"] = group_id
+                        group_entity["group_id"] = group_id
                         # self.row_id_max = max(group_entity["row_id"], self.row_id_max)
-                        # group_entity["column_id"] = n
+                        group_entity["index_id"] = n
                         row_begin_id,row_end_id,column_begin_id,column_end_id = \
                             group_entity["row_begin_id"], group_entity["row_end_id"], \
                             group_entity["column_begin_id"], group_entity["column_end_id"]
@@ -468,9 +471,9 @@ class XFUN(datasets.GeneratorBasedBuilder):
                 self.row_id_max = max(group_entity["row_id"], self.row_id_max)
                 self.column_id_max = max(group_entity["column_id"],self.column_id_max)
                 
-            for n, group_entity in enumerate(entities):
-                group_entity["row_id"] = map_interval(0,self.row_id_max,0,49,group_entity["row_id"])
-                group_entity["column_id"] = map_interval(0,self.column_id_max,0,49,group_entity["column_id"])
+            # for n, group_entity in enumerate(entities):
+            #     group_entity["row_id"] = map_interval(0,self.row_id_max,0,49,group_entity["row_id"])
+            #     group_entity["column_id"] = map_interval(0,self.column_id_max,0,49,group_entity["column_id"])
             
             entity_id_to_index_map_src.append(entity_id_to_index_map)
             entities_src.append(entities)
@@ -494,7 +497,8 @@ class XFUN(datasets.GeneratorBasedBuilder):
             logger.info("Generating examples from = %s", filepath)
             with open(filepath[0], "r", encoding="utf-8") as f:
                 data = json.load(f)
-
+            self.row_id_max = -1
+            self.column_id_max = -1
             for doc in data["documents"]:
                 doc["img"]["fpath"] = os.path.join(filepath[1], doc["img"]["fname"])
                 id = doc['id']
@@ -534,3 +538,4 @@ class XFUN(datasets.GeneratorBasedBuilder):
                         print(f"{doc['id']}_{index_n}",len(item['input_ids']))
                         print(f"self.row_id_max:{self.row_id_max};self.column_id_max:{self.column_id_max}")
                         yield f"{doc['id']}_{index_n}", item
+                        

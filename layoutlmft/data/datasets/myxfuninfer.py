@@ -467,13 +467,18 @@ class XFUN(datasets.GeneratorBasedBuilder):
                 del group_entity["row_begin_id"]
                 del group_entity["row_end_id"]
                 group_entity["row_id"] = row_dict[row_begin_id]
+                self.group_id_max = max(group_entity["group_id"],self.group_id_max)
+                self.index_id_max = max(group_entity["index_id"],self.group_id_max)
                 
                 self.row_id_max = max(group_entity["row_id"], self.row_id_max)
                 self.column_id_max = max(group_entity["column_id"],self.column_id_max)
                 
-            # for n, group_entity in enumerate(entities):
-            #     group_entity["row_id"] = map_interval(0,self.row_id_max,0,49,group_entity["row_id"])
-            #     group_entity["column_id"] = map_interval(0,self.column_id_max,0,49,group_entity["column_id"])
+            for n, group_entity in enumerate(entities):
+                group_entity["group_id"] = map_interval(0,self.group_id_max,0,49,group_entity["group_id"])
+                group_entity["index_id"] = map_interval(0,self.index_id_max,0,49,group_entity["index_id"])
+                           
+                group_entity["row_id"] = map_interval(0,self.row_id_max,0,49,group_entity["row_id"])
+                group_entity["column_id"] = map_interval(0,self.column_id_max,0,49,group_entity["column_id"])
             
             entity_id_to_index_map_src.append(entity_id_to_index_map)
             entities_src.append(entities)
@@ -499,6 +504,8 @@ class XFUN(datasets.GeneratorBasedBuilder):
                 data = json.load(f)
             self.row_id_max = -1
             self.column_id_max = -1
+            self.group_id_max = -1
+            self.index_id_max = -1
             for doc in data["documents"]:
                 doc["img"]["fpath"] = os.path.join(filepath[1], doc["img"]["fname"])
                 id = doc['id']
@@ -538,4 +545,3 @@ class XFUN(datasets.GeneratorBasedBuilder):
                         print(f"{doc['id']}_{index_n}",len(item['input_ids']))
                         print(f"self.row_id_max:{self.row_id_max};self.column_id_max:{self.column_id_max}")
                         yield f"{doc['id']}_{index_n}", item
-                        

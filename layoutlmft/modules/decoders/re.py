@@ -134,8 +134,8 @@ class REEmbeddings(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.label_embedding = nn.Embedding(5, config.hidden_size, scale_grad_by_freq=True)
-        self.row_embeddding = nn.Embedding(35, config.hidden_size, scale_grad_by_freq=True)
-        self.column_embeddding = nn.Embedding(35, config.hidden_size, scale_grad_by_freq=True)
+        self.row_embeddding = nn.Embedding(50, config.hidden_size, scale_grad_by_freq=True)
+        self.column_embeddding = nn.Embedding(50, config.hidden_size, scale_grad_by_freq=True)
         self.positionalembedding = PositionalEncoding(config.hidden_size,35)
         self.dim = config.hidden_size
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
@@ -448,8 +448,9 @@ class CellDecoder(nn.Module):
         self.log_var_re = torch.nn.Parameter(torch.zeros((1,), requires_grad=True))
         self.entity_emb = nn.Embedding(5, config.hidden_size, scale_grad_by_freq=True)
         self.group_dim = config.hidden_size // 2
-        self.group_emb = nn.Embedding(50, self.group_dim, scale_grad_by_freq=True)
-        self.index_emb= nn.Embedding(50, self.group_dim, scale_grad_by_freq=True)
+        # self.group_emb = nn.Embedding(50, self.group_dim, scale_grad_by_freq=True)
+        # self.index_emb= nn.Embedding(50, self.group_dim, scale_grad_by_freq=True)
+        self.re_embedding = REEmbeddings(config)
         # self.entity_emb_rand = nn.Embedding(5, config.hidden_size, scale_grad_by_freq=True)
         self.use_specialid = False
         if self.use_specialid:
@@ -586,64 +587,32 @@ class CellDecoder(nn.Module):
             head_entities = torch.tensor(relations[b]["head"], device=device)
             tail_entities = torch.tensor(relations[b]["tail"], device=device)
             relation_labels = torch.tensor(relations[b]["label"], device=device)
-            entities_start_index = torch.tensor(entities[b]["start"], device=device)
-            entities_end_index = torch.tensor(entities[b]["end"], device=device)
-            # ,"column_id":[0, 0],"row_id":[0, 0]
-            entities_group_index = torch.tensor(entities[b]["column_id"], device=device)
-            entities_index_index = torch.tensor(entities[b]["row_id"], device=device)
-            if self.multi_task:
-                entities_labels = torch.tensor(entities[b]["label"], device=device)
-            else:
-                entities_labels = torch.tensor(pred_entities[b]["label"], device=device)
             
+            entitydata = EntityData(pred_entities[b],device)    
             entities_labels_logits = None
-            
-            head_group_id, head_index_id, head_label, head_entity_repr = self.entity_cell_forward(hidden_states, b, entities_start_index, \
-                                                   entities_end_index, entities_labels , head_entities,entities_group_index,entities_index_index)
-
-            tail_group_id, tail_index_id, tail_label, tail_entity_repr = self.entity_cell_forward(hidden_states, b, entities_start_index, \
-                                        entities_end_index, entities_labels , tail_entities,entities_group_index,entities_index_index)
-            head_label_repr = self.entity_emb(head_label)
-            tail_label_repr = self.entity_emb(tail_label)
-            # head_group_repr,head_index_repr = self.group_emb(head_group_id), self.index_emb(head_index_id)
-            # tail_group_repr,tail_index_repr = self.group_emb(tail_group_id), self.index_emb(tail_index_id)
+            head_row_id, head_column_id, head_group_id, head_index_id, \
+                head_label, head_entity_repr = entitydata.entity_cell_forward(hidden_states,b,head_entities)
                 
-            
+            tail_row_id, tail_column_id, tail_group_id, tail_index_id, \
+                tail_label, tail_entity_repr = entitydata.entity_cell_forward(hidden_states,b,tail_entities)
+                                   
             # if entities_labels_logits != None:
             #     head_label_repr = torch.einsum('sn,nf->snf', head_logits, self.entity_emb.weight).mean(dim=1)
             #     tail_label_repr = torch.einsum('sn,nf->snf', tail_logits, self.entity_emb.weight).mean(dim=1)
             # else:
-            head_label_repr = self.entity_emb(head_label)
-            tail_label_repr = self.entity_emb(tail_label)
+            head_label_repr = self.re_embedding(head_label,head_row_id,head_column_id)
+            tail_label_repr = self.re_embedding(tail_label,tail_row_id,tail_column_id)
             
-            if not self.use_specialid:
-                head_repr = torch.cat(
-                    (head_entity_repr, head_label_repr),
-                    dim=-1,
-                )
-                tail_repr = torch.cat(
-                    (tail_entity_repr, tail_label_repr),
-                    dim=-1,
-                )
-            else:
-                head_group_repr,head_index_repr = self.group_emb(head_group_id), self.index_emb(head_index_id)
-                tail_group_repr,tail_index_repr = self.group_emb(tail_group_id), self.index_emb(tail_index_id)
-                head_repr = torch.cat(
-                    (head_entity_repr, head_label_repr,head_group_repr,head_index_repr),
-                    dim=-1,
-                )
-                tail_repr = torch.cat(
-                    (tail_entity_repr, tail_label_repr,tail_group_repr,tail_index_repr),
-                    dim=-1,
-                )
-            # head_repr = torch.cat(
-            #     (head_entity_repr, head_label_repr),
-            #     dim=-1,
-            # )
-            # tail_repr = torch.cat(
-            #     (tail_entity_repr, tail_label_repr),
-            #     dim=-1,
-            # )
+            head_repr = torch.cat(
+                (head_entity_repr, head_label_repr),
+                dim=-1,
+            )
+            tail_repr = torch.cat(
+                (tail_entity_repr, tail_label_repr),
+                dim=-1,
+            )
+            
+            
             heads = self.ffnn_head(head_repr)
             tails = self.ffnn_tail(tail_repr)
             logits = self.rel_classifier(heads, tails)

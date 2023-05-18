@@ -52,7 +52,7 @@ class XFUN(datasets.GeneratorBasedBuilder):
                 name, data = line.split('\t')
                 name = name.replace('.pdf','.jpg')
                 ocr_data[name] = json.loads(data)
-    tokenizer = AutoTokenizer.from_pretrained("xlm-roberta-base")
+    tokenizer = AutoTokenizer.from_pretrained("/home/zhanghang-s21/data/model/xlm-roberta-base")
     # tokenizer.add_tokens(['<LONGTERM>'], special_tokens=True)
 
     def _info(self):
@@ -470,14 +470,14 @@ class XFUN(datasets.GeneratorBasedBuilder):
                 del group_entity["row_end_id"]
                 group_entity["row_id"] = row_dict[row_begin_id]
                 self.group_id_max = max(group_entity["group_id"],self.group_id_max)
-                self.index_id_max = max(group_entity["index_id"],self.group_id_max)
+                self.index_id_max = max(group_entity["index_id"],self.index_id_max)
                 
                 self.row_id_max = max(group_entity["row_id"], self.row_id_max)
                 self.column_id_max = max(group_entity["column_id"],self.column_id_max)
                 
             for n, group_entity in enumerate(entities):
-                group_entity["group_id"] = map_interval(0,self.group_id_max,0,49,group_entity["group_id"])
-                group_entity["index_id"] = map_interval(0,self.index_id_max,0,49,group_entity["index_id"])
+                # group_entity["group_id"] = map_interval(0,self.group_id_max,0,49,group_entity["group_id"])
+                # group_entity["index_id"] = map_interval(0,self.index_id_max,0,49,group_entity["index_id"])
                            
                 group_entity["row_id"] = map_interval(0,self.row_id_max,0,49,group_entity["row_id"])
                 group_entity["column_id"] = map_interval(0,self.column_id_max,0,49,group_entity["column_id"])
@@ -546,6 +546,6 @@ class XFUN(datasets.GeneratorBasedBuilder):
                             })
                         print(f"{doc['id']}_{index_n}",len(item['input_ids']))
                         print(f"self.row_id_max:{self.row_id_max};self.column_id_max:{self.column_id_max}")
-                        print(f"self.row_id_max:{self.group_id_max};self.column_id_max:{self.index_id_max}")
+                        print(f"self.group_id_max:{self.group_id_max};self.index_id_max:{self.index_id_max}")
                         yield f"{doc['id']}_{index_n}", item
                         

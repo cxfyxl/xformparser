@@ -34,7 +34,7 @@ class XFUN(datasets.GeneratorBasedBuilder):
 
     BUILDER_CONFIGS = [XFUNConfig(name=f"xfun.{lang}", lang=lang) for lang in _LANG]
 
-    tokenizer = AutoTokenizer.from_pretrained("xlm-roberta-base")
+    tokenizer = AutoTokenizer.from_pretrained("/home/zhanghang-s21/data/model/xlm-roberta-base")
 
     def _info(self):
         return datasets.DatasetInfo(

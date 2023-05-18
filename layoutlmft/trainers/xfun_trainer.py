@@ -812,6 +812,8 @@ class XfunJointTrainer(FunsdTrainer):
             labels = inputs.pop("labels")
         else:
             labels = None
+        inputs['epoch'] = self.state.epoch
+        # self.state.epoch
         outputs = model(**inputs)
         # Save past state if it exists
         # TODO: this needs to be fixed and made cleaner later.

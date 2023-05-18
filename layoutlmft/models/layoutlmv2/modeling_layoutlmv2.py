@@ -23,7 +23,7 @@ from transformers.models.layoutlm.modeling_layoutlm import LayoutLMPooler as Lay
 from transformers.models.layoutlm.modeling_layoutlm import LayoutLMSelfOutput as LayoutLMv2SelfOutput
 from transformers.utils import logging
 
-from ...modules.decoders.re import REDecoder,CellDecoder
+from ...modules.decoders.re import REDecoder,CellDecoder,CellDecoderOnnx
 from ...utils import ReOutput
 from .configuration_layoutlmv2 import LayoutLMv2Config
 from .detectron2_config import add_layoutlmv2_config
@@ -705,11 +705,11 @@ class LayoutLMv2Model(LayoutLMv2PreTrainedModel):
             raise ValueError("You have to specify either input_ids or inputs_embeds")
 
         device = input_ids.device if input_ids is not None else inputs_embeds.device
-
-        visual_shape = list(input_shape)
+        from copy import deepcopy
+        visual_shape = list(deepcopy(input_shape))
         visual_shape[1] = self.config.image_feature_pool_shape[0] * self.config.image_feature_pool_shape[1]
         visual_shape = torch.Size(visual_shape)
-        final_shape = list(input_shape)
+        final_shape = list(deepcopy(input_shape))
         final_shape[1] += visual_shape[1]
         final_shape = torch.Size(final_shape)
 
@@ -809,8 +809,8 @@ class LayoutLMv2Model(LayoutLMv2PreTrainedModel):
         sequence_output = encoder_outputs[0]
         pooled_output = self.pooler(sequence_output)
 
-        if not return_dict:
-            return (sequence_output, pooled_output) + encoder_outputs[1:]
+        # if not return_dict:
+        #     return (sequence_output, pooled_output) + encoder_outputs[1:]
 
         return BaseModelOutputWithPoolingAndCrossAttentions(
             last_hidden_state=sequence_output,
@@ -1200,6 +1200,319 @@ class LayoutLMv2ForRelationExtraction(LayoutLMv2PreTrainedModel):
 
 
 
+
+class LayoutLMv2ModelOnnx(LayoutLMv2PreTrainedModel):
+    def __init__(self, config):
+        super(LayoutLMv2ModelOnnx, self).__init__(config)
+        self.config = config
+        self.has_visual_segment_embedding = config.has_visual_segment_embedding
+        self.embeddings = LayoutLMv2Embeddings(config)
+
+        self.visual = VisualBackbone(config)
+        self.visual_proj = nn.Linear(config.image_feature_pool_shape[-1], config.hidden_size)
+        if self.has_visual_segment_embedding:
+            self.visual_segment_embedding = nn.Parameter(nn.Embedding(1, config.hidden_size).weight[0])
+        self.visual_LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+        self.visual_dropout = nn.Dropout(config.hidden_dropout_prob)
+
+        self.encoder = LayoutLMv2Encoder(config)
+        self.pooler = LayoutLMv2Pooler(config)
+
+        self.init_weights()
+
+    def get_input_embeddings(self):
+        return self.embeddings.word_embeddings
+
+    def set_input_embeddings(self, value):
+        self.embeddings.word_embeddings = value
+
+    def _prune_heads(self, heads_to_prune):
+        """
+        Prunes heads of the model. heads_to_prune: dict of {layer_num: list of heads to prune in this layer} See base
+        class PreTrainedModel
+        """
+        for layer, heads in heads_to_prune.items():
+            self.encoder.layer[layer].attention.prune_heads(heads)
+
+    def _calc_text_embeddings(self, input_ids, bbox, position_ids, token_type_ids):
+        seq_length = input_ids.size(1)
+        # if position_ids is None:
+        #     position_ids = torch.arange(seq_length, dtype=torch.long, device=input_ids.device)
+        #     position_ids = position_ids.unsqueeze(0).expand_as(input_ids)
+        # if token_type_ids is None:
+        #     token_type_ids = torch.zeros_like(input_ids)
+
+        words_embeddings = self.embeddings.word_embeddings(input_ids)
+        position_embeddings = self.embeddings.position_embeddings(position_ids)
+        spatial_position_embeddings = self.embeddings._cal_spatial_position_embeddings(bbox)
+        token_type_embeddings = self.embeddings.token_type_embeddings(token_type_ids)
+        embeddings = words_embeddings + position_embeddings + spatial_position_embeddings + token_type_embeddings
+        embeddings = self.embeddings.LayerNorm(embeddings)
+        embeddings = self.embeddings.dropout(embeddings)
+        return embeddings
+
+    def _calc_img_embeddings(self, image, bbox, position_ids):
+        visual_embeddings = self.visual_proj(self.visual(image))
+        position_embeddings = self.embeddings.position_embeddings(position_ids)
+        spatial_position_embeddings = self.embeddings._cal_spatial_position_embeddings(bbox)
+        embeddings = visual_embeddings + position_embeddings + spatial_position_embeddings
+        if self.has_visual_segment_embedding:
+            embeddings += self.visual_segment_embedding
+        embeddings = self.visual_LayerNorm(embeddings)
+        embeddings = self.visual_dropout(embeddings)
+        return embeddings
+
+    def forward(
+        self,
+        input_ids=None,
+        bbox=None,
+        image=None,
+        attention_mask=None,
+        token_type_ids=None,
+        position_ids=None,
+        head_mask=None,
+        inputs_embeds=None,
+        encoder_hidden_states=None,
+        encoder_attention_mask=None,
+        output_attentions=None,
+        output_hidden_states=None,
+        return_dict=None,
+    ):
+        output_attentions = self.config.output_attentions
+        output_hidden_states = (
+             self.config.output_hidden_states
+        )
+        return_dict = self.config.use_return_dict
+        input_shape = [int(input_ids.size()[0]),int(input_ids.size()[1])]
+
+
+        device = input_ids.device
+        from copy import deepcopy
+        visual_shape = list(deepcopy(input_shape))
+        visual_shape[1] = self.config.image_feature_pool_shape[0] * self.config.image_feature_pool_shape[1]
+        visual_shape = torch.Size(visual_shape)
+        final_shape = list(deepcopy(input_shape))
+        final_shape[1] += visual_shape[1]
+        final_shape = torch.Size(final_shape)
+
+        visual_bbox_x = (
+            torch.arange(
+                0,
+                1000 * (self.config.image_feature_pool_shape[1] + 1),
+                1000,
+                device=device,
+                dtype=bbox.dtype,
+            )
+            // self.config.image_feature_pool_shape[1]
+        )
+        visual_bbox_y = (
+            torch.arange(
+                0,
+                1000 * (self.config.image_feature_pool_shape[0] + 1),
+                1000,
+                device=device,
+                dtype=bbox.dtype,
+            )
+            // self.config.image_feature_pool_shape[0]
+        )
+        visual_bbox = torch.stack(
+            [
+                visual_bbox_x[:-1].repeat(self.config.image_feature_pool_shape[0], 1),
+                visual_bbox_y[:-1].repeat(self.config.image_feature_pool_shape[1], 1).transpose(0, 1),
+                visual_bbox_x[1:].repeat(self.config.image_feature_pool_shape[0], 1),
+                visual_bbox_y[1:].repeat(self.config.image_feature_pool_shape[1], 1).transpose(0, 1),
+            ],
+            dim=-1,
+        ).view(-1, bbox.size(-1))
+        visual_bbox = visual_bbox.repeat(final_shape[0], 1, 1)
+        final_bbox = torch.cat([bbox, visual_bbox], dim=1)
+
+        # if attention_mask is None:
+        attention_mask = torch.ones(input_shape, device=device)
+
+        visual_attention_mask = torch.ones(visual_shape, device=device)
+        final_attention_mask = torch.cat([attention_mask, visual_attention_mask], dim=1)
+
+        # if token_type_ids is None:
+        token_type_ids = torch.zeros(input_shape, dtype=torch.long, device=device)
+
+        # if position_ids is None:
+        seq_length = input_shape[1]
+        position_ids = self.embeddings.position_ids[:, :seq_length]
+        position_ids = position_ids.expand_as(input_ids)
+
+        visual_position_ids = torch.arange(0, visual_shape[1], dtype=torch.long, device=device).repeat(
+            input_shape[0], 1
+        )
+        final_position_ids = torch.cat([position_ids, visual_position_ids], dim=1)
+
+        # if bbox is None:
+        #     bbox = torch.zeros(tuple(list(input_shape) + [4]), dtype=torch.long, device=device)
+
+        text_layout_emb = self._calc_text_embeddings(
+            input_ids=input_ids,
+            bbox=bbox,
+            token_type_ids=token_type_ids,
+            position_ids=position_ids,
+        )
+
+        visual_emb = self._calc_img_embeddings(
+            image=image,
+            bbox=visual_bbox,
+            position_ids=visual_position_ids,
+        )
+        final_emb = torch.cat([text_layout_emb, visual_emb], dim=1)
+
+        extended_attention_mask = final_attention_mask.unsqueeze(1).unsqueeze(2)
+
+        extended_attention_mask = extended_attention_mask.to(dtype=self.dtype)
+        extended_attention_mask = (1.0 - extended_attention_mask) * -10000.0
+
+        # if head_mask is not None:
+        #     if head_mask.dim() == 1:
+        #         head_mask = head_mask.unsqueeze(0).unsqueeze(0).unsqueeze(-1).unsqueeze(-1)
+        #         head_mask = head_mask.expand(self.config.num_hidden_layers, -1, -1, -1, -1)
+        #     elif head_mask.dim() == 2:
+        #         head_mask = head_mask.unsqueeze(1).unsqueeze(-1).unsqueeze(-1)
+        #     head_mask = head_mask.to(dtype=next(self.parameters()).dtype)
+        # else:
+        head_mask = [None] * self.config.num_hidden_layers
+
+        encoder_outputs = self.encoder(
+            final_emb,
+            extended_attention_mask,
+            bbox=final_bbox,
+            position_ids=final_position_ids,
+            head_mask=head_mask,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+        )
+        sequence_output = encoder_outputs[0]
+        pooled_output = self.pooler(sequence_output)
+
+        # if not return_dict:
+        #     return (sequence_output, pooled_output) + encoder_outputs[1:]
+
+        return BaseModelOutputWithPoolingAndCrossAttentions(
+            last_hidden_state=sequence_output,
+            pooler_output=pooled_output,
+            hidden_states=encoder_outputs.hidden_states,
+            attentions=encoder_outputs.attentions,
+            cross_attentions=encoder_outputs.cross_attentions,
+        )
+    
+class LayoutLMv2ForJointCellClassificationOnnx(LayoutLMv2PreTrainedModel):
+    def __init__(self, config):
+        super().__init__(config)
+        self.num_labels = config.num_labels
+        self.layoutlmv2 = LayoutLMv2ModelOnnx(config)
+        self.dropout = nn.Dropout(config.hidden_dropout_prob)
+        self.classifier = nn.Linear(config.hidden_size, config.num_labels)
+        self.extractor = CellDecoderOnnx(config)
+        self.loss_fct = CrossEntropyLoss()
+        self.init_weights()
+        # print(f"{self.__class__}:adaptive_loss:{self.adaptive_loss}\tmulti_task:{self.multi_task}")
+
+    def forward(
+        self,
+        input_ids,
+        bbox,
+        image,
+        entities_mask,
+        entities_len,
+        head_id,
+        tail_id,
+        relations_head_mask,
+        relations_head_len,
+        relations_tail_mask,
+        relations_tail_len, 
+        # entities_label=None,
+        # attention_mask=None,
+        # token_type_ids=None,
+        # position_ids=None,
+        # head_mask=None,
+        # inputs_embeds=None,
+        # relations=None,
+        # labels=None,
+        # output_attentions=None,
+        # output_hidden_states=None,
+        # return_dict=None,
+    ):
+        return_dict = self.config.use_return_dict
+
+        outputs = self.layoutlmv2(
+            input_ids=input_ids,
+            bbox=bbox,
+            image=image,
+            # attention_mask=attention_mask,
+            # token_type_ids=token_type_ids,
+            # position_ids=position_ids,
+            # head_mask=head_mask,
+            # inputs_embeds=inputs_embeds,
+            # output_attentions=output_attentions,
+            # output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+        )
+        # seq_length = input_ids.size(1)
+        sequence_output, image_output = outputs[0][:, :512], outputs[0][:, 512:]
+        sequence_output = self.dropout(sequence_output)
+        device = sequence_output.device
+        ner_loss = 0
+        all_logits = []
+        batch_size, max_n_words, context_dim = sequence_output.size()
+        # std_1, std_2= torch.exp(self.log_var_a)**0.5, torch.exp(self.log_var_b)**0.5
+        pred_labels = None
+        pred_entities = []
+        # for b in range(batch_size):      
+        # entities_start_index = entities_start
+        # entities_end_index = entities_end
+
+        # entity_repr = None
+        # index_list = torch.arange(512)
+        index = 0
+        # now_index = torch.cat((entities_start.unsqueeze(1),entities_end.unsqueeze(1)),dim=1)
+        # entity_tp = torch.matmul(entities_mask,sequence_output[0])
+        entity_repr = torch.matmul(entities_mask,sequence_output[0])  / entities_len
+        # for index in range(entities_start.size()[0]):  
+        #     # start_index, end_index = entities_start_index[index].unsqueeze(0), entities_end_index[index].unsqueeze(0)
+        #     index_array = torch.arange(entities_start[index],entities_end[index])
+        #     temp_repr = torch.index_select(sequence_output[0],0,index_array).mean(dim=0).view(1,context_dim)
+        #     # temp_repr = sequence_output[b][start_index:end_index].mean(dim=0).view(1,context_dim)
+        #     entity_repr = temp_repr if entity_repr == None else torch.cat([entity_repr,temp_repr],dim=0)
+        #     index+=1
+            
+            
+            
+        # entities_labels = entities_label[b]
+        
+        logits = self.classifier(entity_repr)
+        # temp_repr = logits.argmax(dim=-1).view(1,-1)
+        # pred_entity = {}
+
+        # pred_entity["start"] = entities_start_index
+        # pred_entity["end"] = entities_end_index
+        # pred_entity["label"] = logits.argmax(dim=-1).tolist()
+        # pred_entities.append(pred_entity)
+
+        #     # ner_loss += self.loss_fct(logits, entities_labels)
+        #     all_logits.append(torch.unsqueeze(logits, 0))
+        # re_loss, pred_relations
+        re_logits = self.extractor(sequence_output,logits, head_id,tail_id, relations_head_mask, \
+                                   relations_head_len,relations_tail_mask,relations_tail_len) # 're_logits'
+
+        # loss = re_loss
+        # loss = gamma * ner_loss + (1 - gamma) * re_loss
+        
+        # for pred_relation in pred_relations:
+        #     for k,v in pred_relation.items():
+        #         if isinstance(pred_relation[k],int):
+        #             pred_relation[k] = torch.tensor(v)
+        return logits , re_logits # , entity_repr # , entities_start_index # ,re_logits #, torch.tensor(index) # , pred_relations# , re_logits# , pred_relations
+    
+
+
+
 class LayoutLMv2ForJointCellClassification(LayoutLMv2PreTrainedModel):
     def __init__(self, config):
         super().__init__(config)
@@ -1207,10 +1520,12 @@ class LayoutLMv2ForJointCellClassification(LayoutLMv2PreTrainedModel):
         self.layoutlmv2 = LayoutLMv2Model(config)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
         self.classifier = nn.Linear(config.hidden_size, config.num_labels)
-        self.lstm_layer = nn.LSTM(config.hidden_size, config.hidden_size // 2, 1, batch_first=True, bidirectional=True)
+        # self.lstm_layer = nn.LSTM(config.hidden_size, config.hidden_size // 2, 1, batch_first=True, bidirectional=True)
         self.extractor = CellDecoder(config)
-        self.group_emb = self.extractor.group_emb
-        self.index_emb = self.extractor.index_emb
+        # self.group_emb = self.extractor.group_emb
+        # self.index_emb = self.extractor.index_emb
+        self.row_embeddding = self.extractor.re_embedding.row_embeddding
+        self.column_embeddding = self.extractor.re_embedding.column_embeddding
         self.softmax = torch.nn.Softmax(dim=-1)
         self.loss_fct = CrossEntropyLoss()
         self.adaptive_loss = self.extractor.adaptive_loss
@@ -1233,18 +1548,19 @@ class LayoutLMv2ForJointCellClassification(LayoutLMv2PreTrainedModel):
         self,
         input_ids=None,
         bbox=None,
+        entities=None,
         image=None,
         attention_mask=None,
         token_type_ids=None,
         position_ids=None,
         head_mask=None,
         inputs_embeds=None,
-        entities=None,
         relations=None,
         labels=None,
         output_attentions=None,
         output_hidden_states=None,
         return_dict=None,
+        epoch = None,
     ):
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
@@ -1279,19 +1595,21 @@ class LayoutLMv2ForJointCellClassification(LayoutLMv2PreTrainedModel):
             
             entities_start_index = torch.tensor(entities[b]["start"],device=device).type(torch.long)
             entities_end_index = torch.tensor(entities[b]["end"], device=device).type(torch.long)
-            entities_group_index = torch.tensor(entities[b]["row_id"], device=device)
-            entities_index_index = torch.tensor(entities[b]["column_id"], device=device)
+            entities_row_index = torch.tensor(entities[b]["row_id"], device=device)
+            entities_column_index = torch.tensor(entities[b]["column_id"], device=device)
+            row_embeddding = self.row_embeddding(entities_row_index)
+            column_embeddding = self.column_embeddding(entities_column_index)
             entity_repr = None
             for i in enumerate(entities_start_index):
                 index = i[0]
                 start_index, end_index = entities_start_index[index], entities_end_index[index]
-                # group_repr,index_repr = self.group_emb(entities_group_index[index]),self.index_emb(entities_index_index[index])
+                # row_repr,column_repr = self.row_embeddding(entities_row_index[index]),self.column_embeddding(entities_column_index[index])
                 # temp_repr = torch.cat(
                 #     (sequence_output[b][start_index:end_index].mean(dim=0), group_repr, index_repr),
                 #     dim=-1,
                 # ).view(1,context_dim*2)
-                #temp_repr = sequence_output[b][start_index:end_index].max(dim=0)[0].view(1,context_dim)
-                temp_repr = sequence_output[b][start_index:end_index].mean(dim=0).view(1,context_dim)
+                # temp_repr = sequence_output[b][start_index:end_index].max(dim=0)[0].view(1,context_dim)
+                temp_repr = sequence_output[b][start_index:end_index].mean(dim=0).view(1,context_dim) # + torch.cat((row_repr,column_repr),dim=-1).view(1,context_dim)
                 entity_repr = temp_repr if entity_repr == None else torch.cat([entity_repr,temp_repr],dim=0)
                 
                 
@@ -1303,14 +1621,14 @@ class LayoutLMv2ForJointCellClassification(LayoutLMv2PreTrainedModel):
             logits = self.classifier(entity_repr)
             # logits = self.softmax(logits)
             pred_entities[b]["label"] = logits.argmax(dim=-1).tolist()
-            # pred_entities[b]["label_logits"] = self.softmax(logits)
+            pred_entities[b]["label_logits"] = "1"
             if self.adaptive_loss:
                 ner_loss += self.criterion(logits,entities_labels,self.log_var_ner, device)
             else:
                 ner_loss += self.loss_fct(logits, entities_labels)
             all_logits.append(logits)
 
-        re_loss, pred_relations = self.extractor(sequence_output, copy.deepcopy(pred_entities), entities, relations)
+        re_loss, pred_relations = self.extractor(sequence_output, copy.deepcopy(pred_entities), entities, relations, epoch, all_logits)
         gamma = 0.33
         loss = ner_loss + re_loss
         # loss = re_loss

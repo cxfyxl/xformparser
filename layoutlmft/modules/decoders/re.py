@@ -3,7 +3,11 @@ import copy
 import torch
 from torch import nn
 from torch.nn import CrossEntropyLoss
+from typing import Any
 
+import torch
+from torch import Tensor
+from torch.nn.parameter import Parameter
 
 class BiaffineAttention(torch.nn.Module):
     """Implements a biaffine attention operator for binary relation classification.
@@ -54,103 +58,124 @@ class BiaffineAttention(torch.nn.Module):
         self.linear.reset_parameters()
 
 import math
-class Trilinear(nn.Module):
-    def __init__(self, in1_features, in2_features, in3_features, out_features, bias=True,device=None, dtype=None):
-        super(Trilinear, self).__init__()
+class MyBilinear(torch.nn.Module):
+    __constants__ = ['in1_features', 'in2_features', 'out_features']
+    in1_features: int
+    in2_features: int
+    out_features: int
+    weight: Tensor
+
+    def __init__(self, in1_features: int, in2_features: int, out_features: int, bias: bool = True,
+                 device=None, dtype=None) -> None:
         factory_kwargs = {'device': device, 'dtype': dtype}
-        self.linear1 = nn.Linear(in1_features, out_features, bias=bias)
-        self.linear2 = nn.Linear(in2_features, out_features, bias=bias)
-        self.linear3 = nn.Linear(in3_features, out_features, bias=bias)
-        self.weight = nn.Parameter(torch.empty((out_features, in1_features, in2_features, in3_features), **factory_kwargs))
+        super().__init__()
+        self.in1_features = in1_features
+        self.in2_features = in2_features
+        self.out_features = out_features
+        self.weight = Parameter(torch.empty((out_features, in1_features, in2_features), **factory_kwargs))
+
         if bias:
-            self.bias = nn.Parameter(torch.empty(out_features, **factory_kwargs))
+            self.bias = Parameter(torch.empty(out_features, **factory_kwargs))
         else:
             self.register_parameter('bias', None)
         self.reset_parameters()
-        
-    def reset_parameters(self):
-        stdv = 1. / math.sqrt(self.weight.size(1))
-        self.weight.data.uniform_(-stdv, stdv)
-        if self.bias is not None:
-            self.bias.data.uniform_(-stdv, stdv)
-            
-    def forward(self, x1, x2, x3):
-        # out = torch.einsum('nwhc1,nwhc2,nwhc3,ic1c2c3->ni', x1, x2, x3, self.weight)
-        y1 = self.linear1(x1)
-        y2 = self.linear2(x2)
-        y3 = self.linear3(x3)
 
-        y = torch.bmm(y1.unsqueeze(2), y2.unsqueeze(1)).squeeze()
-        y = torch.bmm(y.unsqueeze(2), y3.unsqueeze(1)).squeeze()
+    def reset_parameters(self) -> None:
+        bound = 1 / math.sqrt(self.weight.size(1))
+        nn.init.uniform_(self.weight, -bound, bound)
+        if self.bias is not None:
+            nn.BatchNorm2dinit.uniform_(self.bias, -bound, bound)
+
+    def forward(self, input1: Tensor, input2: Tensor) -> Tensor:
+        y = torch.zeros((input1.shape[0],self.weight.shape[0]))
+        for k in range(self.weight.shape[0]):
+            buff = torch.matmul(input1, self.weight[k])
+            buff = buff * input2#torch.matmul(buff, input2)
+            buff = torch.sum(buff,dim=1)
+            y[:,k] = buff
+        if self.bias is not None:
+            y += self.bias
         return y
+
+    def extra_repr(self) -> str:
+        return 'in1_features={}, in2_features={}, out_features={}, bias={}'.format(
+            self.in1_features, self.in2_features, self.out_features, self.bias is not None
+        )
 
 
 class MyBiaffineAttention(torch.nn.Module):
-    
     def __init__(self, in_features, out_features):
         super(MyBiaffineAttention, self).__init__()
+
         self.in_features = in_features
         self.out_features = out_features
-        self.trilinear_1 = torch.nn.Bilinear(in_features, in_features, in_features, bias=False)
-        self.trilinear_2 = torch.nn.Bilinear(in_features, in_features, out_features, bias=False)
-        self.linear = torch.nn.Linear(3 * in_features, out_features, bias=True)
+
+        self.bilinear = MyBilinear(in_features, in_features, out_features, bias=False)
+        self.linear = torch.nn.Linear(2 * in_features, out_features, bias=True)
+
         self.reset_parameters()
 
-    def forward(self, x_1, x_2, x_3):
-        # self.trilself.trilinear_1(torch.cat((x_1, x_2), dim=-1),x_3)inear_2(self.trilinear_1(x_1,x_2),x_3) +
-        return  self.trilinear_2(x_1,x_2) + self.linear(torch.cat((x_1, x_2, x_3), dim=-1))
+    def forward(self, x_1, x_2):
+        
+        return self.bilinear(x_1, x_2) + self.linear(torch.cat((x_1, x_2), dim=-1))
 
     def reset_parameters(self):
-        self.trilinear_1.reset_parameters()
-        self.trilinear_2.reset_parameters()
+        self.bilinear.reset_parameters()
         self.linear.reset_parameters()
 
 import torch
 
-class PositionalEncoding(nn.Module):
-    def __init__(self, d_model, max_len=5000):
-        """
-        :param d_model: pe编码维度，一般与word embedding相同，方便相加
-        :param dropout: dorp out
-        :param max_len: 语料库中最长句子的长度，即word embedding中的L
-        """
-        super(PositionalEncoding, self).__init__()
-        # 计算pe编码
-        pe = torch.zeros(max_len, d_model) # 建立空表，每行代表一个词的位置，每列代表一个编码位
-        position = torch.arange(0, max_len).unsqueeze(1) # 建个arrange表示词的位置以便公式计算，size=(max_len,1)
-        div_term = torch.exp(torch.arange(0, d_model, 2) *    # 计算公式中10000**（2i/d_model)
-                             -(math.log(10000.0) / d_model))
-        pe[:, 0::2] = torch.sin(position * div_term)  # 计算偶数维度的pe值
-        pe[:, 1::2] = torch.cos(position * div_term)  # 计算奇数维度的pe值
-        pe = pe.unsqueeze(0)  # size=(1, L, d_model)，为了后续与word_embedding相加,意为batch维度下的操作相同
-        self.register_buffer('pe', pe)  # pe值是不参加训练的
-
-    def forward(self, x):
-        # 输入的最终编码 = word_embedding + positional_embedding
-        x = x + nn.Variable(self.pe[:, :x.size(1)],requires_grad=False) #size = [batch, L, d_model]
-        return x # size = [batch, L, d_model]
 
 class REEmbeddings(nn.Module):
     def __init__(self, config, use_special = False):
         super().__init__()
         self.use_special = use_special
         self.label_embedding = nn.Embedding(5, config.hidden_size, scale_grad_by_freq=True)
-        self.row_embeddding = nn.Embedding(50, config.hidden_size, scale_grad_by_freq=True)
-        self.column_embeddding = nn.Embedding(50, config.hidden_size, scale_grad_by_freq=True)
-        self.positionalembedding = PositionalEncoding(config.hidden_size,35)
-        self.dim = config.hidden_size
+        self.row_embeddding = nn.Embedding(50, config.hidden_size // 2, scale_grad_by_freq=True)
+        self.column_embeddding = nn.Embedding(50, config.hidden_size // 2 , scale_grad_by_freq=True)
+        # self.positionalembedding = PositionalEncoding(config.hidden_size // 2,60)
+        self.softmax = torch.nn.Softmax(dim=-1)
+        self.dim = config.hidden_size + config.hidden_size
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
-        
-    def forward(self, label,row_id,column_id):
-        label_embedding = self.label_embedding(label)
+        self.begin_epoch = 100
+        self.warm_epoch = 10
+        print(f"self.begin_epoch:{self.begin_epoch}")
+
+    def forward(self,label,label_logits,row_id,column_id,epoch):
+        # label_embedding = self.label_embedding(label)
+        if epoch != None and label_logits != None and epoch>=self.begin_epoch and self.training:
+            # soft_label = self.softmax(label_logits)
+            soft_embedding = torch.einsum('sn,nf->snf', label_logits, self.label_embedding.weight).mean(dim=1)
+            hard_embedding = self.label_embedding(label)
+            alpha = min(1,(epoch-self.begin_epoch)/self.warm_epoch)
+            label_embedding = alpha * soft_embedding + (1-alpha)*hard_embedding
+            # label_embedding = torch.einsum('sn,nf->snf', label_logits, self.label_embedding.weight).mean(dim=1)
+            # tail_label_repr = torch.einsum('sn,nf->snf', tail_logits, self.entity_emb.weight).mean(dim=1)
+            # else:
+        # elif not self.training and label_logits != None:
+        #     soft_label = self.softmax(label_logits)
+        #     label_embedding = torch.einsum('sn,nf->snf', soft_label, self.label_embedding.weight).mean(dim=1)
+        else:
+            label_embedding = self.label_embedding(label)
         if self.use_special:
-            print("self.use_special in REEmbeddings")
+            # print("self.use_special in REEmbeddings")
             row_embeddding = self.row_embeddding(row_id)
             column_embeddding = self.column_embeddding(column_id)
-            final_embedings = label_embedding + row_embeddding + column_embeddding
+    
+            # row_embeddding = self.positionalembedding(row_id)
+            # column_embeddding = self.positionalembedding(column_id)
+            final_embedings = label_embedding + torch.cat(
+                (row_embeddding, column_embeddding),
+                dim=-1,
+            )
+            # final_embedings = torch.cat(
+            #     (label_embedding, row_embeddding, column_embeddding),
+            #     dim=-1,
+            # )
+            # final_embedings = label_embedding + row_embeddding + column_embeddding
         else:
             final_embedings = label_embedding
-        final_embedings = self.dropout(final_embedings)
+        # final_embedings = self.dropout(final_embedings)
         return final_embedings
 
 
@@ -162,6 +187,7 @@ class EntityData():
         self.entities_column_index = torch.tensor(entity["column_id"], device=device)
         self.entities_group_index = torch.tensor(entity["group_id"], device=device)
         self.entities_index_index = torch.tensor(entity["index_id"], device=device)
+        # self.entities_labels_logits = entity["label_logits"]
         if "pred_label" in entity.keys():
             self.entities_labels = torch.tensor(entity["pred_label"], device=device)
         else:
@@ -180,7 +206,7 @@ class EntityData():
         head_group_id = self.entities_group_index[head_entities]
         head_index_id = self.entities_index_index[head_entities]
         # if entities_labels_logits != None:
-        #     head_logits = entities_labels_logits[head_entities]
+        # head_logits = self.entities_labels_logits[head_entities]
         head_entity_repr = None
         for i in enumerate(head_start_index):
             index = i[0]
@@ -188,7 +214,7 @@ class EntityData():
             temp_repr = hidden_states[b][start_index:end_index].mean(dim=0).view(1,context_dim)
             # temp_repr = hidden_states[b][start_index:end_index].max(dim=0)[0].view(1,context_dim)
             head_entity_repr = temp_repr if head_entity_repr == None else torch.cat([head_entity_repr,temp_repr], dim=0)
-        return head_row_id, head_column_id, head_group_id, head_index_id, head_label, head_entity_repr
+        return head_row_id, head_column_id, head_group_id, head_index_id, head_label, head_entity_repr# , head_logits
 
 class REDecoder(nn.Module):
     def __init__(self, config):
@@ -455,13 +481,16 @@ class CellDecoder(nn.Module):
         self.group_dim = config.hidden_size // 2
         # self.group_emb = nn.Embedding(50, self.group_dim, scale_grad_by_freq=True)
         # self.index_emb= nn.Embedding(50, self.group_dim, scale_grad_by_freq=True)
-        self.re_embedding = REEmbeddings(config)
-        # self.entity_emb_rand = nn.Embedding(5, config.hidden_size, scale_grad_by_freq=True)
         self.use_specialid = False
-        if self.use_specialid:
-            self.mlp_dim = config.hidden_size * 2 + 2 * self.group_dim
-        else:
-            self.mlp_dim = config.hidden_size * 2   # + config.hidden_size
+        self.re_embedding = REEmbeddings(config,self.use_specialid)
+        self.use_group = False
+        self.use_index = False
+        # self.entity_emb_rand = nn.Embedding(5, config.hidden_size, scale_grad_by_freq=True)
+        self.mlp_dim = config.hidden_size * 2
+        # if self.use_specialid:
+        #     self.mlp_dim = config.hidden_size * 2 + 2 * self.group_dim
+        # else:
+        #     self.mlp_dim = config.hidden_size * 2   # + config.hidden_size
         
         self.del_begin = 0
         self.del_end = 50
@@ -482,6 +511,8 @@ class CellDecoder(nn.Module):
         self.ffnn_tail = copy.deepcopy(projection)
         self.rel_classifier = BiaffineAttention(self.mlp_dim // 4, 2)
         self.loss_fct = CrossEntropyLoss()
+        
+        print(f"self.use_specialid:{self.use_specialid}\tself.use_group:{self.use_group}\tself.use_index:{self.use_index}")
         print(f"{self.__class__}:adaptive_loss:{self.adaptive_loss}\tmulti_task:{self.multi_task}")   
         print(f"self.del_begin:{self.del_begin},self.del_end:{self.del_end},self.use_del:{self.use_del}")
         
@@ -493,11 +524,13 @@ class CellDecoder(nn.Module):
         return loss
 
     def build_relation(self, relations, pred_entities, entities):
-        batch_size = len(relations)
+        batch_size = len(entities)
         new_relations = []
         for b in range(batch_size):
             if len(entities[b]["start"]) <= 2:
-                entities[b] = pred_entities[b] = {"end": [1, 1], "label": [0, 0], "start": [0, 0],"column_id":[0, 0],"row_id":[0, 0]}
+                entities[b] = pred_entities[b] = {"end": [1, 1], "label": [0, 0], \
+                                                  "group_id":[0, 0],"index_id":[0, 0], \
+                                                  "start": [0, 0],"column_id":[0, 0],"row_id":[0, 0],}
             if self.use_del:
                 all_possible_relations = set(
                     [
@@ -579,7 +612,7 @@ class CellDecoder(nn.Module):
         return head_group_id, head_index_id, head_label, head_entity_repr
 
    
-    def forward(self, hidden_states, pred_entities, entities, relations):
+    def forward(self, hidden_states, pred_entities, entities, relations, epoch, all_logits):
         batch_size, max_n_words, context_dim = hidden_states.size()
         device = hidden_states.device
         if self.training:
@@ -592,21 +625,33 @@ class CellDecoder(nn.Module):
             head_entities = torch.tensor(relations[b]["head"], device=device)
             tail_entities = torch.tensor(relations[b]["tail"], device=device)
             relation_labels = torch.tensor(relations[b]["label"], device=device)
-            
             entitydata = EntityData(pred_entities[b],device)    
             entities_labels_logits = None
+            head_logits, tail_logits = None, None
+            if 'label_logits' in pred_entities[b].keys():
+                entities_labels_logits = all_logits[b]
             head_row_id, head_column_id, head_group_id, head_index_id, \
                 head_label, head_entity_repr = entitydata.entity_cell_forward(hidden_states,b,head_entities)
                 
             tail_row_id, tail_column_id, tail_group_id, tail_index_id, \
                 tail_label, tail_entity_repr = entitydata.entity_cell_forward(hidden_states,b,tail_entities)
                                    
-            # if entities_labels_logits != None:
+            if entities_labels_logits != None:
+                head_logits, tail_logits = entities_labels_logits[head_entities],entities_labels_logits[tail_entities]
             #     head_label_repr = torch.einsum('sn,nf->snf', head_logits, self.entity_emb.weight).mean(dim=1)
             #     tail_label_repr = torch.einsum('sn,nf->snf', tail_logits, self.entity_emb.weight).mean(dim=1)
             # else:
-            head_label_repr = self.re_embedding(head_label,head_row_id,head_column_id)
-            tail_label_repr = self.re_embedding(tail_label,tail_row_id,tail_column_id)
+            now_head_row_id, now_head_column_id = head_row_id,head_column_id
+            now_tail_row_id, now_tail_column_id = tail_row_id,tail_column_id
+            if self.use_group:
+                now_head_row_id = head_group_id
+                now_tail_row_id = tail_group_id
+            if self.use_index:
+                now_head_column_id = head_index_id
+                now_tail_column_id = tail_index_id
+                
+            head_label_repr = self.re_embedding(head_label,head_logits,now_head_row_id,now_head_column_id,epoch)
+            tail_label_repr = self.re_embedding(tail_label,tail_logits,now_tail_row_id,now_tail_column_id,epoch)
             
             head_repr = torch.cat(
                 (head_entity_repr, head_label_repr),
@@ -628,3 +673,113 @@ class CellDecoder(nn.Module):
             pred_relations = self.get_predicted_relations(logits, relations[b], entities[b])
             all_pred_relations.append(pred_relations)
         return loss, all_pred_relations
+    
+
+
+
+
+class EntityDataOnnx():
+    def __init__(self, entity, device):
+        self.entities_start_index = entity["start"]
+        self.entities_end_index = entity["end"]
+        self.entities_labels = torch.tensor(entity["label"],device=device)
+        
+        
+    def entity_cell_forward(self, hidden_states, b, head_entities):
+        batch_size, max_n_words, context_dim = hidden_states.size()
+        head_start_index = self.entities_start_index[head_entities]
+        head_end_index = self.entities_end_index[head_entities]
+        head_label = self.entities_labels[head_entities]
+
+        # if entities_labels_logits != None:
+        #     head_logits = entities_labels_logits[head_entities]
+        head_entity_repr = None
+        index_list = torch.ones_like(head_start_index)
+        index = 0
+        for i in torch.unbind(head_start_index):
+            # index = i[0]
+            # start_index, end_index = head_start_index[index], head_end_index[index]
+            # temp_repr = hidden_states[b][start_index:end_index].mean(dim=0).view(1,context_dim)
+            index_array = torch.arange(head_start_index[index],head_end_index[index])
+            temp_repr = torch.index_select(hidden_states[b],0,index_array).mean(dim=0).view(1,context_dim)
+            # temp_repr = hidden_states[b][start_index:end_index].max(dim=0)[0].view(1,context_dim)
+            head_entity_repr = temp_repr if head_entity_repr == None else torch.cat([head_entity_repr,temp_repr], dim=0)
+            index+=1
+        return head_label, head_entity_repr
+
+class CellDecoderOnnx(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.entity_emb = nn.Embedding(5, config.hidden_size)
+        self.mlp_dim = config.hidden_size * 2
+        self.del_begin = 0
+        self.del_end = 50
+        
+        projection = nn.Sequential(
+            nn.Linear(self.mlp_dim, self.mlp_dim // 2),
+            nn.ReLU(),
+            nn.Dropout(config.hidden_dropout_prob),
+            nn.Linear(self.mlp_dim // 2, self.mlp_dim // 4),
+            nn.ReLU(),
+            nn.Dropout(config.hidden_dropout_prob),
+        )
+
+        
+        self.ffnn_head = copy.deepcopy(projection)
+        self.ffnn_tail = copy.deepcopy(projection)
+        self.rel_classifier = MyBiaffineAttention(self.mlp_dim // 4, 2)
+        self.loss_fct = CrossEntropyLoss()
+
+        
+    # def get_predicted_relations(self, logits, relations, entities):
+    #     pred_relations = []
+    #     for i, pred_label in enumerate(logits.argmax(-1)):
+    #         if pred_label != 1:
+    #             continue
+    #         rel = {}
+    #         rel["head_id"] = relations["head"][i]
+    #         rel["head"] = entities["start"][rel["head_id"]]
+    #         rel["head_type"] = entities["label"][rel["head_id"]]
+
+    #         rel["tail_id"] = relations["tail"][i]
+    #         rel["tail"] = entities["start"][rel["tail_id"]]
+    #         rel["tail_type"] = entities["label"][rel["tail_id"]]
+    #         rel["type"] = 1
+    #         pred_relations.append(rel)
+    #     return pred_relations
+    
+   
+    def forward(self, hidden_states,
+                labels,
+                head_id,tail_id,
+                relations_head_mask,
+        relations_head_len,
+        relations_tail_mask,
+        relations_tail_len):
+        # batch_size, max_n_words, context_dim = hidden_states.size()
+        # device = hidden_states.device
+        # relations, entities = self.build_relation(pred_entities, pred_entities)
+
+        # labels = torch.argmax(logits,dim=1)
+        head_label, tail_label = labels[head_id], labels[tail_id]
+        head_label_repr = self.entity_emb(head_label)
+        tail_label_repr = self.entity_emb(tail_label)
+        head_entity_repr = torch.matmul(relations_head_mask, hidden_states[0]) / relations_head_len
+        tail_entity_repr = torch.matmul(relations_tail_mask, hidden_states[0]) / relations_tail_len
+
+        head_repr = torch.cat(
+            (head_entity_repr, head_label_repr),
+            dim=1,
+        )
+        tail_repr = torch.cat(
+            (tail_entity_repr, tail_label_repr),
+            dim=1,
+        )
+            
+        heads = self.ffnn_head(head_repr)
+        tails = self.ffnn_tail(tail_repr)
+        logits = self.rel_classifier(heads, tails)
+            # all_logits.append(logits)
+            # pred_relations = self.get_predicted_relations(logits, relations[b], entities[b])
+            # all_pred_relations.append(pred_relations)
+        return logits # , pred_relations

@@ -20,6 +20,9 @@ layoutlmft/data/datasets/funsd.py
 layoutlmft/data/datasets/myxfun.py
 layoutlmft/data/datasets/myxfuninfer.py
 layoutlmft/data/datasets/myxfunsplit.py
+layoutlmft/data/datasets/myxfunsplit_avg.py
+layoutlmft/data/datasets/myxfunsplit_new.py
+layoutlmft/data/datasets/myxfunsplit_table.py
 layoutlmft/data/datasets/xfun.py
 layoutlmft/models/__init__.py
 layoutlmft/models/model_args.py

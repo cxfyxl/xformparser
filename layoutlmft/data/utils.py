@@ -70,6 +70,8 @@ def normalize_bbox(bbox, size):
 def map_range(x, in_min, in_max, out_min, out_max):
     return (x - in_min) * (out_max - out_min) // (in_max - in_min) + out_min
 
+# def map_interval(a, b, c, d, x):
+#     return int(d*(x/b))
 def map_interval(a, b, c, d, x):
     return map_range(x, a, b, c, d)
 

@@ -74,28 +74,32 @@ class MyBilinear(torch.nn.Module):
         self.out_features = out_features
         self.weight = Parameter(torch.empty((out_features, in1_features, in2_features), **factory_kwargs))
 
-        if bias:
-            self.bias = Parameter(torch.empty(out_features, **factory_kwargs))
-        else:
-            self.register_parameter('bias', None)
+        # if bias:
+        #     self.bias = Parameter(torch.empty(out_features, **factory_kwargs))
+        # else:
+        self.register_parameter('bias', None)
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
         bound = 1 / math.sqrt(self.weight.size(1))
         nn.init.uniform_(self.weight, -bound, bound)
-        if self.bias is not None:
-            nn.BatchNorm2dinit.uniform_(self.bias, -bound, bound)
+        # if self.bias is not None:
+        #     nn.BatchNorm2dinit.uniform_(self.bias, -bound, bound)
 
     def forward(self, input1: Tensor, input2: Tensor) -> Tensor:
-        y = torch.zeros((input1.shape[0],self.weight.shape[0]))
-        for k in range(self.weight.shape[0]):
-            buff = torch.matmul(input1, self.weight[k])
-            buff = buff * input2#torch.matmul(buff, input2)
-            buff = torch.sum(buff,dim=1)
-            y[:,k] = buff
-        if self.bias is not None:
-            y += self.bias
-        return y
+        # y = torch.zeros((input1.shape[0],self.weight.shape[0]))
+        # for k in range(self.weight.shape[0]):
+        buff1 = torch.matmul(input1, self.weight[0])
+        buff1 = buff1 * input2 #torch.matmul(buff, input2)
+        buff1 = torch.sum(buff1,dim=1).unsqueeze(1)
+
+        buff2 = torch.matmul(input1, self.weight[1])
+        buff2 = buff2 * input2 #torch.matmul(buff, input2)
+        buff2 = torch.sum(buff2,dim=1).unsqueeze(1)
+        # y[:,k] = buff
+        # if self.bias is not None:
+        #     y += self.bias
+        return torch.cat((buff1,buff2),dim=-1)
 
     def extra_repr(self) -> str:
         return 'in1_features={}, in2_features={}, out_features={}, bias={}'.format(
@@ -131,13 +135,13 @@ class REEmbeddings(nn.Module):
         super().__init__()
         self.use_special = use_special
         self.label_embedding = nn.Embedding(5, config.hidden_size, scale_grad_by_freq=True)
-        self.row_embeddding = nn.Embedding(50, config.hidden_size // 2, scale_grad_by_freq=True)
-        self.column_embeddding = nn.Embedding(50, config.hidden_size // 2 , scale_grad_by_freq=True)
+        self.row_embeddding = nn.Embedding(50, config.hidden_size, scale_grad_by_freq=True)
+        self.column_embeddding = nn.Embedding(50, config.hidden_size, scale_grad_by_freq=True)
         # self.positionalembedding = PositionalEncoding(config.hidden_size // 2,60)
         self.softmax = torch.nn.Softmax(dim=-1)
         self.dim = config.hidden_size + config.hidden_size
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
-        self.begin_epoch = 100
+        self.begin_epoch = 150
         self.warm_epoch = 10
         print(f"self.begin_epoch:{self.begin_epoch}")
 
@@ -149,6 +153,7 @@ class REEmbeddings(nn.Module):
             hard_embedding = self.label_embedding(label)
             alpha = min(1,(epoch-self.begin_epoch)/self.warm_epoch)
             label_embedding = alpha * soft_embedding + (1-alpha)*hard_embedding
+            # label_embedding = soft_embedding
             # label_embedding = torch.einsum('sn,nf->snf', label_logits, self.label_embedding.weight).mean(dim=1)
             # tail_label_repr = torch.einsum('sn,nf->snf', tail_logits, self.entity_emb.weight).mean(dim=1)
             # else:
@@ -164,15 +169,15 @@ class REEmbeddings(nn.Module):
     
             # row_embeddding = self.positionalembedding(row_id)
             # column_embeddding = self.positionalembedding(column_id)
-            final_embedings = label_embedding + torch.cat(
-                (row_embeddding, column_embeddding),
-                dim=-1,
-            )
+            # final_embedings = label_embedding + torch.cat(
+            #     (row_embeddding, column_embeddding),
+            #     dim=-1,
+            # )
             # final_embedings = torch.cat(
             #     (label_embedding, row_embeddding, column_embeddding),
             #     dim=-1,
             # )
-            # final_embedings = label_embedding + row_embeddding + column_embeddding
+            final_embedings = label_embedding + row_embeddding + column_embeddding
         else:
             final_embedings = label_embedding
         # final_embedings = self.dropout(final_embedings)
@@ -222,7 +227,7 @@ class REDecoder(nn.Module):
         self.angle_dim = config.hidden_size // 2
         self.group_dim = config.hidden_size // 4
         self.use_angle = False
-        self.use_specialid = False
+        self.use_specialid = True
         self.del_begin = 0
         self.del_end = 50
         self.mlp_dim = config.hidden_size * 2   # + config.hidden_size
@@ -472,7 +477,31 @@ class REDecoder(nn.Module):
     
     
 
-    
+
+class BiaffineAttentionLayout(torch.nn.Module):
+
+    def __init__(self, in_features, out_features):
+        super(BiaffineAttentionLayout, self).__init__()
+
+        self.in_features = in_features
+        self.out_features = out_features
+
+        self.bilinear = torch.nn.Bilinear(in_features, in_features, out_features, bias=False)
+        self.linear = torch.nn.Linear(2 * in_features, out_features, bias=True)
+        self.linear_layout = torch.nn.Linear(256,out_features,bias=True)
+
+        self.reset_parameters()
+
+    def forward(self, x_1, x_2,x_embed,y_embed):
+        
+        return self.bilinear(x_1, x_2) + self.linear(torch.cat((x_1, x_2), dim=-1)) + self.linear_layout(torch.cat((x_embed, y_embed), dim=-1))
+
+    def reset_parameters(self):
+        self.bilinear.reset_parameters()
+        self.linear.reset_parameters() 
+
+
+
 class CellDecoder(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -485,8 +514,20 @@ class CellDecoder(nn.Module):
         self.re_embedding = REEmbeddings(config,self.use_specialid)
         self.use_group = False
         self.use_index = False
+        self.head_nums = 8
         # self.entity_emb_rand = nn.Embedding(5, config.hidden_size, scale_grad_by_freq=True)
         self.mlp_dim = config.hidden_size * 2
+        # self.transformer = nn.TransformerEncoderLayer(self.mlp_dim, 1, self.mlp_dim, config.hidden_dropout_prob)
+        # self.transformer = nn.Transformer(d_model=self.mlp_dim,num_encoder_layers=1,num_decoder_layers=1,dropout=config.hidden_dropout_prob)
+        self.lstm_layer = nn.LSTM(self.mlp_dim, self.mlp_dim // 2, 1, batch_first=True, bidirectional=True)
+        # self.transformer_layer = nn.TransformerEncoderLayer(d_model=self.mlp_dim,nhead=16,dropout=config.hidden_dropout_prob)
+        # self.transformer_layer = nn.Transformer(d_model=self.mlp_dim,dropout=config.hidden_dropout_prob)
+        # self.attention_layer = nn.MultiheadAttention(self.mlp_dim, self.head_nums, config.hidden_dropout_prob)
+        # self.dense = nn.Linear(self.mlp_dim,self.mlp_dim)
+        self.angle_embedding = nn.Embedding(8, 256, scale_grad_by_freq=True)
+        self.x_position_embeddings = nn.Embedding(config.max_2d_position_embeddings, config.coordinate_size, scale_grad_by_freq=True)
+        self.y_position_embeddings = nn.Embedding(config.max_2d_position_embeddings, config.coordinate_size, scale_grad_by_freq=True)
+        # self.tails_attention = nn.MultiheadAttention(self.mlp_dim, self.head_nums, config.hidden_dropout_prob)
         # if self.use_specialid:
         #     self.mlp_dim = config.hidden_size * 2 + 2 * self.group_dim
         # else:
@@ -506,12 +547,16 @@ class CellDecoder(nn.Module):
         self.adaptive_loss = False
         self.multi_task = False
         self.use_del = True
-        
+        self.use_angle = False
+        self.dropout = nn.Dropout(config.hidden_dropout_prob)
         self.ffnn_head = copy.deepcopy(projection)
         self.ffnn_tail = copy.deepcopy(projection)
-        self.rel_classifier = BiaffineAttention(self.mlp_dim // 4, 2)
+        if self.use_angle:
+            self.rel_classifier = BiaffineAttentionLayout(self.mlp_dim // 4, 2)
+        else:
+            self.rel_classifier = BiaffineAttention(self.mlp_dim // 4, 2)
         self.loss_fct = CrossEntropyLoss()
-        
+        print(f"self.use_angle{self.use_angle}")
         print(f"self.use_specialid:{self.use_specialid}\tself.use_group:{self.use_group}\tself.use_index:{self.use_index}")
         print(f"{self.__class__}:adaptive_loss:{self.adaptive_loss}\tmulti_task:{self.multi_task}")   
         print(f"self.del_begin:{self.del_begin},self.del_end:{self.del_end},self.use_del:{self.use_del}")
@@ -564,6 +609,7 @@ class CellDecoder(nn.Module):
             negative_relations = all_possible_relations - positive_relations
             positive_relations = set([i for i in positive_relations if i in all_possible_relations])
             reordered_relations = list(positive_relations) + list(negative_relations)
+            
             relation_per_doc = {"head": [], "tail": [], "label": []}
             relation_per_doc["head"] = [i[0] for i in reordered_relations]
             relation_per_doc["tail"] = [i[1] for i in reordered_relations]
@@ -611,13 +657,54 @@ class CellDecoder(nn.Module):
             head_entity_repr = temp_repr if head_entity_repr == None else torch.cat([head_entity_repr,temp_repr], dim=0)
         return head_group_id, head_index_id, head_label, head_entity_repr
 
-   
-    def forward(self, hidden_states, pred_entities, entities, relations, epoch, all_logits):
+
+    def get_angle(self, x1, y1, x2, y2):
+        """
+        计算两个点之间的角度，以第一个点为基点，水平向右为0°基准。
+        Args:
+            x1, y1: 第一个点的坐标。
+            x2, y2: 第二个点的坐标。
+
+        Returns:
+            以度为单位的角度值。
+        """
+        import math
+        # 将输入转换为 Tensor
+        # x1, y1, x2, y2 = torch.tensor(x1), torch.tensor(y1), torch.tensor(x2), torch.tensor(y2)
+
+        # 计算向量AB的x分量和y分量
+        dx, dy = x2 - x1, y2 - y1
+
+        # 计算极角，需要注意x分量为0的情况
+        mask1 = (dx > 0)
+        mask2 = (dx < 0)
+        mask3 = (dx == 0) & (dy > 0)
+        mask4 = (dx == 0) & (dy < 0)
+
+        angle = torch.zeros_like(dx,dtype=torch.float32)
+        angle[mask1] = torch.atan(dy[mask1] / dx[mask1])
+        angle[mask2] = torch.atan(dy[mask2] / dx[mask2]) + math.pi
+        angle[mask3] = math.pi / 2
+        angle[mask4] = -math.pi / 2
+
+        # 将极角转换为角度
+        degree = torch.rad2deg(angle)
+        degree[degree < 0] += 360
+        for i in range(0,360,45):
+            mask = (degree>=i) & (degree<=i+45)
+            degree[mask] = int(i/45)
+            
+        
+        return degree.long()
+    
+    
+    def forward(self, hidden_states,bbox, pred_entities, entities, relations, epoch, all_logits):
         batch_size, max_n_words, context_dim = hidden_states.size()
         device = hidden_states.device
         if self.training:
             relations, entities = self.build_relation(relations, pred_entities, entities)
         else:
+            # relations, entities = self.build_relation(relations, pred_entities, entities)
             relations, entities = self.build_relation(relations, pred_entities, pred_entities)
         loss = 0
         all_pred_relations = []
@@ -628,6 +715,16 @@ class CellDecoder(nn.Module):
             entitydata = EntityData(pred_entities[b],device)    
             entities_labels_logits = None
             head_logits, tail_logits = None, None
+
+            if self.use_angle:
+                head_bbox_x,head_bbox_y = bbox[b][head_entities][:,0],bbox[b][head_entities][:,1]
+                tail_bbox_x,tail_bbox_y = bbox[b][tail_entities][:,0],bbox[b][tail_entities][:,1]
+                x_embed = self.x_position_embeddings(abs(head_bbox_x - tail_bbox_x))
+                y_embed = self.y_position_embeddings(abs(head_bbox_y - tail_bbox_y))
+                # entity_angle = self.get_angle(head_bbox_x,head_bbox_y,tail_bbox_x,tail_bbox_y)
+                # angle_embed = self.angle_embedding(entity_angle)
+
+                
             if 'label_logits' in pred_entities[b].keys():
                 entities_labels_logits = all_logits[b]
             head_row_id, head_column_id, head_group_id, head_index_id, \
@@ -652,7 +749,8 @@ class CellDecoder(nn.Module):
                 
             head_label_repr = self.re_embedding(head_label,head_logits,now_head_row_id,now_head_column_id,epoch)
             tail_label_repr = self.re_embedding(tail_label,tail_logits,now_tail_row_id,now_tail_column_id,epoch)
-            
+            # head_repr = head_entity_repr
+            # tail_repr = tail_entity_repr
             head_repr = torch.cat(
                 (head_entity_repr, head_label_repr),
                 dim=-1,
@@ -661,11 +759,36 @@ class CellDecoder(nn.Module):
                 (tail_entity_repr, tail_label_repr),
                 dim=-1,
             )
+            head_repr = head_repr.unsqueeze(0)
+            tail_repr = tail_repr.unsqueeze(0)
+            # head_repr = self.transformer_layer(head_repr)
+            # head_repr = self.attention_layer(head_repr,tail_repr,head_repr)[0]
+            head_repr,(h_n, c_n) = self.lstm_layer(head_repr)
             
             
+            
+
+            # # tail_repr = self.transformer_layer(tail_repr)
+            # # tail_repr = self.attention_layer(tail_repr,head_repr,tail_repr)[0]
+            tail_repr,(h_n, c_n) = self.lstm_layer(tail_repr)
+            tail_repr = self.dropout(tail_repr)
+            head_repr = self.dropout(head_repr)
+
+            head_repr = head_repr.squeeze(0)
+            tail_repr = tail_repr.squeeze(0)
+            # head_repr = self.dense(head_repr)
+            # tail_repr = self.dense(tail_repr)
+            # attn_heads, head_weighted = self.heads_attention(head_repr,head_repr,head_repr)
+            # attn_tails, tail_weighted = self.tails_attention(tail_repr,tail_repr,tail_repr)
+            # heads = self.ffnn_head(attn_heads.squeeze(0))
+            # tails = self.ffnn_tail(attn_tails.squeeze(0))
             heads = self.ffnn_head(head_repr)
             tails = self.ffnn_tail(tail_repr)
-            logits = self.rel_classifier(heads, tails)
+            # logits = self.rel_classifier(heads, tails)
+            if self.use_angle:
+                logits = self.rel_classifier(heads, tails, x_embed,y_embed)
+            else:
+                logits = self.rel_classifier(heads,tails)
             if self.adaptive_loss:
                 loss += self.criterion(logits,relation_labels,self.log_var_re,device)
             else:
@@ -707,6 +830,27 @@ class EntityDataOnnx():
             index+=1
         return head_label, head_entity_repr
 
+class MyModel(nn.Module):
+    def __init__(self, mlp_dim, hidden_dropout_prob):
+        super(MyModel, self).__init__()
+        self.mlp_dim = mlp_dim
+        self.hidden_dropout_prob = hidden_dropout_prob
+        self.layer1 = nn.Linear(self.mlp_dim, self.mlp_dim // 2)
+        self.relu1 = nn.ReLU()
+        self.dropout1 = nn.Dropout(self.hidden_dropout_prob)
+        self.layer2 = nn.Linear(self.mlp_dim // 2, self.mlp_dim // 4)
+        self.relu2 = nn.ReLU()
+        self.dropout2 = nn.Dropout(self.hidden_dropout_prob)
+
+    def forward(self, x):
+        x = self.layer1(x)
+        x = self.relu1(x)
+        x = self.dropout1(x)
+        x = self.layer2(x)
+        x = self.relu2(x)
+        x = self.dropout2(x)
+        return x
+
 class CellDecoderOnnx(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -714,8 +858,11 @@ class CellDecoderOnnx(nn.Module):
         self.mlp_dim = config.hidden_size * 2
         self.del_begin = 0
         self.del_end = 50
-        
-        projection = nn.Sequential(
+        # self.ffnn_head = MyModel(self.mlp_dim,config.hidden_dropout_prob)
+        # self.ffnn_tail = MyModel(self.mlp_dim,config.hidden_dropout_prob)
+        self.lstm_layer = nn.LSTM(self.mlp_dim, self.mlp_dim // 2, 1, batch_first=True, bidirectional=True)
+        self.dropout = nn.Dropout(config.hidden_dropout_prob)
+        self.ffnn_head  = nn.Sequential(
             nn.Linear(self.mlp_dim, self.mlp_dim // 2),
             nn.ReLU(),
             nn.Dropout(config.hidden_dropout_prob),
@@ -724,9 +871,16 @@ class CellDecoderOnnx(nn.Module):
             nn.Dropout(config.hidden_dropout_prob),
         )
 
-        
-        self.ffnn_head = copy.deepcopy(projection)
-        self.ffnn_tail = copy.deepcopy(projection)
+        self.ffnn_tail = nn.Sequential(
+            nn.Linear(self.mlp_dim, self.mlp_dim // 2),
+            nn.ReLU(),
+            nn.Dropout(config.hidden_dropout_prob),
+            nn.Linear(self.mlp_dim // 2, self.mlp_dim // 4),
+            nn.ReLU(),
+            nn.Dropout(config.hidden_dropout_prob),
+        )
+        # self.ffnn_head = copy.deepcopy(projection)
+        # self.ffnn_tail = copy.deepcopy(projection)
         self.rel_classifier = MyBiaffineAttention(self.mlp_dim // 4, 2)
         self.loss_fct = CrossEntropyLoss()
 
@@ -775,9 +929,22 @@ class CellDecoderOnnx(nn.Module):
             (tail_entity_repr, tail_label_repr),
             dim=1,
         )
-            
+        head_repr = head_repr.unsqueeze(0)
+        tail_repr = tail_repr.unsqueeze(0)
+
+        head_repr,(h_n, c_n) = self.lstm_layer(head_repr)
+        tail_repr,(h_n, c_n) = self.lstm_layer(tail_repr)
+        
+        tail_repr = self.dropout(tail_repr)
+        head_repr = self.dropout(head_repr)  
+        head_repr = head_repr.squeeze(0)
+        tail_repr = tail_repr.squeeze(0)
+        
         heads = self.ffnn_head(head_repr)
         tails = self.ffnn_tail(tail_repr)
+
+
+
         logits = self.rel_classifier(heads, tails)
             # all_logits.append(logits)
             # pred_relations = self.get_predicted_relations(logits, relations[b], entities[b])

@@ -12,8 +12,7 @@ from layoutlmft.data.data_args import XFUNDataTrainingArguments
 from layoutlmft.data.data_collator import DataCollatorForKeyValueExtraction
 from layoutlmft.evaluation import re_score
 from layoutlmft.models.model_args import ModelArguments
-from layoutlmft.models.layoutlmv2 import LayoutLMv2ForJointCellClassificationOnnx,LayoutLMv2ForJointCellClassificationREOnnx
-# from layoutlmft.modules.decoders.re import CellDecoderOnnx
+from layoutlmft.models.layoutlmv2 import LayoutLMv2ForJointCellClassification,LayoutLMv2ForJointCellClassificationOnnx
 from layoutlmft.trainers import XfunJointTrainer
 from transformers import (
     AutoConfig,
@@ -51,6 +50,7 @@ from torch.utils.data import DataLoader, SequentialSampler, TensorDataset
 
 logger = logging.getLogger(__name__)
 
+
 class ONNXModel:
     def __init__(self, onnx_path):
         self.onnx_session = onnxruntime.InferenceSession(onnx_path)
@@ -87,8 +87,7 @@ class ONNXModel:
         relations_head_mask=None,
         relations_head_len=None,
         relations_tail_mask=None,
-        relations_tail_len=None, 
-        ):
+        relations_tail_len=None):
 
         input_feed = {
             'input_ids': input_ids,
@@ -106,7 +105,6 @@ class ONNXModel:
         }
         output = self.onnx_session.run(self.output_name, input_feed=input_feed)
         return output
-
     
 def padding(x, pad):
     x += [pad] * (128 - len(x))
@@ -118,10 +116,17 @@ def get_mask_len(start,end):
     temp = torch.full((1,768),end-start)
     return mask, temp
 # def translate(exp_dir, features, n_batch, device,config, model):
-def translate(nermodel,remodel, test_dataloader, model_args, label_list, n_batch):
+def translate(model, test_dataloader, model_args, label_list, n_batch):
 
-    ner_onnxfile = os.path.join(model_args.model_name_or_path,"generic_ner_1.0.0.onnx")
-    re_onnxfile = os.path.join(model_args.model_name_or_path,"generic_re_1.0.0.onnx")
+    n_batch = 1
+    device = torch.device("cpu")
+    configfile = os.path.join(model_args.model_name_or_path,"config.json")
+    binfile = os.path.join(model_args.model_name_or_path,"pytorch_model.bin")
+    onnxfile = os.path.join(model_args.model_name_or_path,"generic_ner_1.0.0.onnx")
+    id2label = {i: label for i, label in enumerate(label_list)}
+    label2id = {label: i for i, label in enumerate(label_list)}
+    num_labels = len(label_list)
+
     for step, inputs in enumerate(test_dataloader):
         # pass
         del inputs['id']
@@ -137,7 +142,6 @@ def translate(nermodel,remodel, test_dataloader, model_args, label_list, n_batch
         # relations = inputs['relations']
         entities_mask = None
         entities_len = None
-        
         for start, end in zip(inputs['entities'][0]['start'],inputs['entities'][0]['end']):
             mask = torch.zeros(512)
             mask[start:end] = 1
@@ -170,10 +174,13 @@ def translate(nermodel,remodel, test_dataloader, model_args, label_list, n_batch
         #     for k,v in entity.items():
         #         entity[k] = [int(i) for i in entity[k]]
         #         entity[k] = torch.tensor(entity[k]).to(device)
-        ner_sample_input = {
-            'input_ids': inputs['input_ids'].squeeze(0),
-            'bbox': inputs['bbox'].squeeze(0),
-            'image':image.tensor.squeeze(0),
+        sample_input = {
+            'input_ids': inputs['input_ids'],
+            'bbox': inputs['bbox'],
+            #'attention_mask':torch.zeros((1,512), dtype=torch.int64) + 1,
+            'image':image.tensor,
+            # 'entities_start':inputs['entities'][0]['start'],
+            # 'entities_end': inputs['entities'][0]['end'],
             'entities_mask':entities_mask,
             'entities_len':entities_len,
             'head_id':head_id,
@@ -181,68 +188,46 @@ def translate(nermodel,remodel, test_dataloader, model_args, label_list, n_batch
             'relations_head_mask':relations_head_mask,
             'relations_head_len':relations_head_len,
             'relations_tail_mask':relations_tail_mask,
-            'relations_tail_len':relations_tail_len,  
+            'relations_tail_len':relations_tail_len,            
+            # 'entities_label':inputs['entities'][0]['label'].view(1,-1),
         }
 
         with torch.no_grad():
-            nermodel.eval()
+            model.eval()
             torch.onnx.export(
-                model=nermodel,
-                args=tuple(ner_sample_input.values()),
-                f=ner_onnxfile,
-                input_names=list(ner_sample_input.keys()),#,'re_logits','pred_relations'
+                model=model,
+                args=tuple(sample_input.values()),
+                f=onnxfile,
+                input_names=list(sample_input.keys()),#,'re_logits','pred_relations'
                 output_names=['logits','re_logits'], # logits, re_logits, pred_relations,'re_logits','re_logits'
                 opset_version=12,
                 export_params = True,
-                do_constant_folding=False,
+                # do_constant_folding=False,
                 # verbose=False,
                 # opset_version=13,
                 # do_constant_folding=True,
                 dynamic_axes={
+                    # 'input_ids': {0: 'batch_size'},
+                    # 'bbox': {0: 'batch_size'},
+                    # 'entities_start':{0: 'entity_len'},
+                    # 'entities_end': {0: 'entity_len'},
                     'entities_mask':{0: 'entity_len'},
                     'entities_len':{0: 'entity_len'},
+                    # 'entities_label':{0: 'batch_size', 1: 'entity_len'},
                     'head_id':{0: 'pred_re_len'},
                     'tail_id':{0: 'pred_re_len'},
                     'relations_head_mask':{0: 'pred_re_len'},
                     'relations_head_len':{0: 'pred_re_len'},
                     'relations_tail_mask':{0: 'pred_re_len'},
                     'relations_tail_len':{0: 'pred_re_len'}, 
-                    # 'logits': {0: 'entity_len'},
-                    're_logits': {0: 'pred_re_len'},
                     'logits': {0: 'entity_len'},
+                    're_logits': {0: 'pred_re_len'},
                 },
             )
-
-            # print("NERComplete")
-            # torch.onnx.export(
-            #     model=remodel,
-            #     args=tuple(re_sample_input.values()),
-            #     f=re_onnxfile,
-            #     input_names=list(re_sample_input.keys()),#,'re_logits','pred_relations'
-            #     output_names=['re_logits'], # logits, re_logits, pred_relations,'re_logits','re_logits'
-            #     opset_version=12,
-            #     export_params = True,
-            #     do_constant_folding=False,
-            #     # verbose=False,
-            #     # opset_version=13,
-            #     # do_constant_folding=True,
-            #     dynamic_axes={
-            #         'head_id':{0: 'pred_re_len'},
-            #         'tail_id':{0: 'pred_re_len'},
-            #         'labels':{0: 'entity_len'},
-            #         'relations_head_mask':{0: 'pred_re_len'},
-            #         'relations_head_len':{0: 'pred_re_len'},
-            #         'relations_tail_mask':{0: 'pred_re_len'},
-            #         'relations_tail_len':{0: 'pred_re_len'}, 
-            #         # 'logits': {0: 'entity_len'},
-            #         're_logits': {0: 'pred_re_len'},
-            #     },
-            # )
-
             # torch.onnx.export(model, (input_ids,bbox,labels,entities), onnxfile,
             #                     verbose=False, input_names=input_names, output_names=output_names)
             # print(model(input_ids, bbox,labels,entities,relations).size())
-            print("REComplete")
+            print("Complete")
         break
 
 def build_relation(labels):
@@ -260,170 +245,43 @@ def build_relation(labels):
             and (j - i) >= 0
         ]
     )
-    reordered_relations = sorted(list(all_possible_relations))
-    
+
+    reordered_relations = all_possible_relations
     relation_per_doc = {"head": [], "tail": [], "label": []}
     relation_per_doc["head"] = [i[0] for i in reordered_relations]
     relation_per_doc["tail"] = [i[1] for i in reordered_relations]
     relation_per_doc["label"] = [1] * len(reordered_relations)
     # assert len(relation_per_doc["head"]) != 0
     # new_relations.append(relation_per_doc)
-    return relation_per_doc, [i[0]*len(labels)+i[1] for i in reordered_relations]
+    return relation_per_doc
 
-
-def get_predicted_relations(logits, entities,relations, labels):
+def get_predicted_relations(logits, relations, labels):
     pred_relations = []
     for i, pred_label in enumerate(logits.argmax(-1)):
         if pred_label != 1:
             continue
         rel = {}
         rel["head_id"] = relations["head"][i]
-        rel["head"] = (entities["start"][rel["head_id"]], entities["end"][rel["head_id"]])
+        # rel["head"] = entities["start"][rel["head_id"]]
         rel["head_type"] = labels[rel["head_id"]]
 
         rel["tail_id"] = relations["tail"][i]
-        rel["tail"] = (entities["start"][rel["tail_id"]], entities["end"][rel["tail_id"]])
+        # rel["tail"] = entities["start"][rel["tail_id"]]
         rel["tail_type"] = labels[rel["tail_id"]]
         rel["type"] = 1
         pred_relations.append(rel)
     return pred_relations
+def test(onnxmodel, model, test_dataloader, model_args, label_list, n_batch):
 
-def accuracy(list1, list2):
-    """
-    计算分类准确率
-    """
-    total = len(list1)
-    correct = sum(1 for i in range(total) if list1[i] == list2[i])
-    acc = correct / total
-    return acc
-def test1(ner_onnxmodel,ner_model,test_dataloader):
-    base_labels = []
-    onnx_labels = []
-    re_labels = None
-    pred_relations = None
-    pred_entities = None
-    entities = None
-    gt_relations = []
-    pred_result = []
-    for step, inputs in enumerate(test_dataloader):
-        # pass
-        if step != 6:
-            continue
-        del inputs['id']
-        del inputs['len']
-        del inputs['labels']
-        # del inputs['image']
-        input_ids = inputs['input_ids']
-        image = inputs['image']
-        bbox = inputs['bbox']
-        entities = inputs['entities']
-        # labels = inputs['labels']
-        entities_mask = None
-        entities_len = None
-        relations_head_mask,relations_tail_mask = None, None
-        relations_head_len,relations_tail_len = None, None
-        i,j=0,0
-        head_id = None
-        tail_id = None
-        for start, end in zip(inputs['entities'][0]['start'],inputs['entities'][0]['end']):
-            mask = torch.zeros(512)
-            mask[start:end] = 1
-            mask = mask.view(1,-1)
-            entities_mask = mask if entities_mask==None else torch.cat((entities_mask,mask),dim=0)
-            temp = torch.full((1,768),end-start)
-            entities_len = temp if entities_len==None else torch.cat((entities_len,temp),dim=0)
-            # pass
-        for head_start, head_end in zip(inputs['entities'][0]['start'],inputs['entities'][0]['end']):
-            head_mask, head_len = get_mask_len(head_start,head_end)
-            j=0
-            for tail_start, tail_end in zip(inputs['entities'][0]['start'],inputs['entities'][0]['end']):
-                tail_mask, tail_len = get_mask_len(tail_start,tail_end)
-                relations_head_mask = head_mask if relations_head_mask==None else torch.cat((relations_head_mask,head_mask),dim=0)
-                relations_head_len =  head_len if relations_head_len==None else torch.cat((relations_head_len,head_len),dim=0)
-                
-                relations_tail_mask = tail_mask if relations_tail_mask==None else torch.cat((relations_tail_mask,tail_mask),dim=0)
-                relations_tail_len =  tail_len if relations_tail_len==None else torch.cat((relations_tail_len,tail_len),dim=0)
-                head_id = torch.tensor(i).view(1) if head_id == None else torch.cat((head_id, torch.tensor(i).view(1)),dim=0)
-                tail_id = torch.tensor(j).view(1) if tail_id == None else torch.cat((tail_id, torch.tensor(j).view(1)),dim=0)
-                j+=1
-            i+=1
+    n_batch = 1
+    device = torch.device("cpu")
+    configfile = os.path.join(model_args.model_name_or_path,"config.json")
+    binfile = os.path.join(model_args.model_name_or_path,"pytorch_model.bin")
+    onnxfile = os.path.join(model_args.model_name_or_path,"generic_ner_1.0.0.onnx")
+    id2label = {i: label for i, label in enumerate(label_list)}
+    label2id = {label: i for i, label in enumerate(label_list)}
+    num_labels = len(label_list)
 
-        sample_input = {
-            'input_ids': inputs['input_ids'],
-            'bbox': inputs['bbox'],
-            'image':image.tensor,
-            'entities_mask':entities_mask,
-            'entities_len':entities_len,
-            'head_id':head_id,
-            'tail_id':tail_id,
-            'relations_head_mask':relations_head_mask,
-            'relations_head_len':relations_head_len,
-            'relations_tail_mask':relations_tail_mask,
-            'relations_tail_len':relations_tail_len,            
-        }
-        # tp_labels = [i for i in inputs['labels'].view(-1).tolist() if i!=-100]
-        base_labels.extend(inputs['entities'][0]['label'])
-        onnx_sample_input = {
-            'input_ids': inputs['input_ids'].squeeze(0).numpy(),
-            'bbox': inputs['bbox'].squeeze(0).numpy(),
-            'image':image.tensor.squeeze(0).numpy(),
-
-            'entities_mask':entities_mask.numpy(),
-            'entities_len':entities_len.numpy(),
-            'head_id':head_id.numpy(),
-            'tail_id':tail_id.numpy(),
-            'relations_head_mask':relations_head_mask.numpy(),
-            'relations_head_len':relations_head_len.numpy(),
-            'relations_tail_mask':relations_tail_mask.numpy(),
-            'relations_tail_len':relations_tail_len.numpy(),            
-        }
-        # ner_model.eval()
-            # import numpy as np
-        
-        with torch.no_grad():
-            onnx_output = ner_onnxmodel.forward(**onnx_sample_input)
-            onnx_pre_labels = list(np.argmax(onnx_output[0],axis=1))
-            onnx_labels.extend(onnx_pre_labels)
-            
-            onnx_relations,onnx_pred_index = build_relation(onnx_pre_labels)
-            onnx_re_logits = onnx_output[1][onnx_pred_index]
-            onnx_result = get_predicted_relations(onnx_re_logits,entities[0],onnx_relations,onnx_pre_labels)
-            pred_result.append(onnx_result)
-            # get_predicted_relations
-            # onnx_relations = build_relation(onnx_pre_labels)
-            # onnx_result = get_predicted_relations(onnx_output[1],onnx_relations,onnx_pre_labels)
-
-            base_output = ner_model.forward(**inputs)
-            base_pre_labels = list(base_output[0].argmax(dim=-1).numpy())
-            # # base_relations = build_relation(base_pre_labels)
-            # # base_result = get_predicted_relations(base_output[1].numpy(),base_relations,base_pre_labels)
-            print(base_pre_labels==onnx_pre_labels)
-        rel_sent = []
-        
-
-        for head, tail in zip(inputs['relations'][0]["head"], inputs['relations'][0]["tail"]):
-            rel = {}
-            rel["head_id"] = head
-            rel["head"] = (entities[0]["start"][rel["head_id"]], entities[0]["end"][rel["head_id"]])
-            rel["head_type"] = entities[0]["label"][rel["head_id"]]
-
-            rel["tail_id"] = tail
-            rel["tail"] = (entities[0]["start"][rel["tail_id"]], entities[0]["end"][rel["tail_id"]])
-            rel["tail_type"] = entities[0]["label"][rel["tail_id"]]
-
-            rel["type"] = 1
-
-            rel_sent.append(rel)
-
-        gt_relations.append(rel_sent)
-        
-        assert len(onnx_pre_labels) == len(inputs['entities'][0]['label'])
-        # break
-    score = re_score(pred_result, gt_relations, mode="boundaries")
-    print(accuracy(base_labels,onnx_labels))
-    
-
-def test(ner_model,ner_onnxmodel,re_model,re_onnxmodel, test_dataloader, model_args, label_list, n_batch):
     for step, inputs in enumerate(test_dataloader):
         # pass
         del inputs['id']
@@ -470,33 +328,6 @@ def test(ner_model,ner_onnxmodel,re_model,re_onnxmodel, test_dataloader, model_a
 
         entities = inputs['entities']
         # relations = inputs['relations']
-
-        ner_sample_input = {
-            'input_ids': inputs['input_ids'],
-            'bbox': inputs['bbox'],
-            'image':image.tensor,
-            'entities_mask':entities_mask,
-            'entities_len':entities_len,
-        }
-
-        re_sample_input = {
-            'input_ids': inputs['input_ids'],
-            'bbox': inputs['bbox'],
-            #'attention_mask':torch.zeros((1,512), dtype=torch.int64) + 1,
-            'image':image.tensor,
-            # 'entities_start':inputs['entities'][0]['start'],
-            # 'entities_end': inputs['entities'][0]['end'],
-            'labels':torch.flatten(inputs['labels'])[:len(inputs['entities'][0]['start'])],
-            # 'entities_mask':entities_mask,
-            # 'entities_len':entities_len,
-            'head_id':head_id,
-            'tail_id':tail_id,
-            'relations_head_mask':relations_head_mask,
-            'relations_head_len':relations_head_len,
-            'relations_tail_mask':relations_tail_mask,
-            'relations_tail_len':relations_tail_len,            
-            # 'entities_label':inputs['entities'][0]['label'].view(1,-1),
-        }
         sample_input = {
             'input_ids': inputs['input_ids'],
             'bbox': inputs['bbox'],
@@ -670,8 +501,7 @@ def main():
         revision=model_args.model_revision,
         use_auth_token=True if model_args.use_auth_token else None,
     )
-    # LayoutLMv2ForJointCellClassificationOnnx
-    ner_model = LayoutLMv2ForJointCellClassificationOnnx.from_pretrained(
+    model = LayoutLMv2ForJointCellClassificationOnnx.from_pretrained(
         model_args.model_name_or_path,
         from_tf=bool(".ckpt" in model_args.model_name_or_path),
         config=config,
@@ -679,14 +509,6 @@ def main():
         revision=model_args.model_revision,
         use_auth_token=True if model_args.use_auth_token else None,
     )
-    # re_model = LayoutLMv2ForJointCellClassificationREOnnx.from_pretrained(
-    #     model_args.model_name_or_path,
-    #     from_tf=bool(".ckpt" in model_args.model_name_or_path),
-    #     config=config,
-    #     cache_dir=model_args.cache_dir,
-    #     revision=model_args.model_revision,
-    #     use_auth_token=True if model_args.use_auth_token else None,
-    # )
     
     # optimizer = AdamW([{"params":model.classifier,"lr":1e-5}],lr=5e-5)
     # Tokenizer check: this script requires a fast tokenizer.
@@ -698,9 +520,37 @@ def main():
         )
 
 
+
     # Preprocessing the dataset
     # Padding strategy
     padding = "max_length" if data_args.pad_to_max_length else False
+
+    train_mode = "base"
+    print(f"train_mode:{train_mode}")
+    if training_args.do_train:
+        if "train" not in datasets:
+            raise ValueError("--do_train requires a train dataset")
+        if train_mode == "shuffle":
+            train_dataset = datasets["train"].shuffle(seed=training_args.seed)# .sort("len",reverse=True)
+            print(f"train_mode:{train_mode}")
+        elif train_mode == "sorted":
+            train_dataset = datasets["train"].sort("len")
+            print(f"train_mode:{train_mode}")
+        elif train_mode == "reverse":
+            train_dataset = datasets["train"].sort("len",reverse=True)
+            print(f"train_mode:{train_mode}")
+        else:
+            train_dataset = datasets["train"]
+            print(f"train_mode:{train_mode}")
+        if data_args.max_train_samples is not None:
+            train_dataset = train_dataset.select(range(data_args.max_train_samples))
+    
+    # if training_args.do_train:
+    #     if "train" not in datasets:
+    #         raise ValueError("--do_train requires a train dataset")
+    #     train_dataset = datasets["train"].sort("len")
+    #     if data_args.max_train_samples is not None:
+    #         train_dataset = train_dataset.select(range(data_args.max_train_samples))
 
     if training_args.do_eval:
         if "validation" not in datasets:
@@ -729,20 +579,79 @@ def main():
     test_dataloader = DataLoader(test_dataset, sampler=test_sampler, batch_size=1,collate_fn=data_collator)
  
     
-    # translate(ner_model,None, test_dataloader, model_args, label_list, 1)
+    translate(model, test_dataloader, model_args, label_list, 1)
     import onnx
     # import onnx.helper as helper
     # onnxmodel = onnx.load(os.path.join(model_args.model_name_or_path,"generic_ner_1.0.0.onnx"))
     
     # onnx_model = onnx.load(os.path.join(model_args.model_name_or_path,"generic_ner_1.0.0.onnx"))
     # onnx.checker.check_model(os.path.join(model_args.model_name_or_path,"generic_ner_1.0.0.onnx"))
-    ner_onnxmodel = ONNXModel(os.path.join(model_args.model_name_or_path,"generic_ner_1.0.0.onnx"))
-    # re_onnxmodel = ONNXREModel(os.path.join(model_args.model_name_or_path,"generic_re_1.0.0.onnx"))
-    # test(ner_model,ner_onnxmodel,re_model,re_onnxmodel, test_dataloader, model_args, label_list, 1)
-    test1(ner_onnxmodel,ner_model, test_dataloader)
+    onnxmodel = ONNXModel(os.path.join(model_args.model_name_or_path,"generic_ner_1.0.0.onnx"))
+    test(onnxmodel,model,test_dataloader, model_args, label_list, 1)
+    def compute_metrics(p):
+        pred_relations, gt_relations = p
+        score = re_score(pred_relations, gt_relations, mode="boundaries")
+        return score
 
+    # Initialize our Trainer
+    trainer = XfunJointTrainer(
+        model=model,
+        args=training_args,
+        train_dataset=train_dataset if training_args.do_train else None,
+        eval_dataset=eval_dataset if training_args.do_eval else None,
+        # test_dataset=test_dataset if training_args.do_predict else None,
+        tokenizer=tokenizer,
+        # optimizer=optimizer,
+        data_collator=data_collator,
+        compute_metrics=compute_metrics,
+    )
+    trainer.test_dataset = test_dataset
+    # trainer.    
+    # trainer.create_optimizer_and_scheduler(trainer.args.max_steps)
+    
+    # trainer.optimizer =  AdamW([{"params":model.classifier.parameters(),"lr":1e-5},
+    #                 {"params":model.layoutlmv2.parameters()},
+    #                 {"params":model.extractor.parameters()}],lr=5e-5)
 
+    # Training
+    if training_args.do_train:
+        checkpoint = last_checkpoint if last_checkpoint else None
+        train_result = trainer.train(resume_from_checkpoint=checkpoint)
+        metrics = train_result.metrics
+        trainer.save_model()  # Saves the tokenizer too for easy upload
 
+        max_train_samples = (
+            data_args.max_train_samples if data_args.max_train_samples is not None else len(train_dataset)
+        )
+        metrics["train_samples"] = min(max_train_samples, len(train_dataset))
+
+        trainer.log_metrics("train", metrics)
+        trainer.save_metrics("train", metrics)
+        trainer.save_state()
+
+    # Evaluation
+    if training_args.do_eval:
+        logger.info("*** Evaluate ***")
+
+        metrics = trainer.evaluate()
+
+        max_val_samples = data_args.max_val_samples if data_args.max_val_samples is not None else len(eval_dataset)
+        metrics["eval_samples"] = min(max_val_samples, len(eval_dataset))
+
+        trainer.log_metrics("eval", metrics)
+        trainer.save_metrics("eval", metrics)
+    # Predict
+    if training_args.do_predict:
+        logger.info("*** Predict ***")       
+        predictions, labels, metrics = trainer.predict(test_dataset)
+        # Save predictions
+        print(metrics)
+        trainer.log_metrics("test", metrics)
+        trainer.save_metrics("test", metrics)
+        # output_test_predictions_file = os.path.join(training_args.output_dir, test_name + "_data_test_predictions_re.json")
+        # with open(output_test_predictions_file, 'w') as f:
+        #     json.dump({'pred':predictions, 'label': labels}, f)
+    # wandb.finish()
 
 
 def _mp_fn(index):

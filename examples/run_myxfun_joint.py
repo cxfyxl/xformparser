@@ -230,11 +230,13 @@ def main():
             test_dataset = test_dataset.select(range(data_args.max_test_samples))
 
     # Data collator
+    max_length = 512
+    print(f"max_length:{max_length}")
     data_collator = DataCollatorForKeyValueExtraction(
         tokenizer,
         pad_to_multiple_of=8 if training_args.fp16 else None,
         padding=padding,
-        max_length=512,
+        max_length=max_length,
     )
 
     def compute_metrics(p):

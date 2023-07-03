@@ -7,7 +7,7 @@ import sys
 import json
 import numpy as np
 from datasets import ClassLabel, load_dataset
-# import wandb
+import wandb
 import layoutlmft.data.datasets.xfun
 import transformers
 from layoutlmft import AutoModelForRelationExtraction
@@ -28,13 +28,13 @@ from transformers import (
 from transformers.trainer_utils import get_last_checkpoint, is_main_process
 
 # set the wandb project where this run will be logged
-os.environ["WANDB_PROJECT"]="my-joint-re"
+# os.environ["WANDB_PROJECT"]="my-joint-re"
 
 # save your trained model checkpoint to wandb
-os.environ["WANDB_LOG_MODEL"]="true"
+# os.environ["WANDB_LOG_MODEL"]="true"
 
-# turn off watch to log faster
-os.environ["WANDB_WATCH"]="false"
+# # turn off watch to log faster
+# os.environ["WANDB_WATCH"]="false"
 
 
 logger = logging.getLogger(__name__)
@@ -98,8 +98,8 @@ def main():
     #     keep_in_memory=True,
     # )
     datasets = load_dataset(
-        '/home/zhanghang-s21/data/layoutlmft/layoutlmft/data/datasets/xfun.py',
-        "xfun.zh",
+        '/home/zhanghang-s21/data/layoutlmft/layoutlmft/data/datasets/xfun_new.py',
+        "xfun_new.zh",
         additional_langs=data_args.additional_langs,
         keep_in_memory=True,
     )
@@ -269,7 +269,7 @@ def main():
         output_test_predictions_file = os.path.join(training_args.output_dir, test_name + "_data_test_predictions_re.json")
         with open(output_test_predictions_file, 'w') as f:
             json.dump({'pred':predictions, 'label': labels}, f)
-    wandb.finish()
+    # wandb.finish()
 
 
 def _mp_fn(index):

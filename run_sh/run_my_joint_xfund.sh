@@ -1,6 +1,6 @@
-WANDB_PROJECT="my-testdata-re"
+WANDB_PROJECT="xfund-re"
 WANDB_NAME="$4"
-CUDA_VISIBLE_DEVICES=$1,$2 python -m torch.distributed.launch --master_port $3 --nproc_per_node=2 examples/run_myxfun_joint.py \
+CUDA_VISIBLE_DEVICES=$1,$2 python -m torch.distributed.launch --master_port $3 --nproc_per_node=2 examples_pub/run_xfun_joint.py \
         --model_name_or_path /home/zhanghang-s21/data/model/layoutxlm-base \
         --overwrite_output_dir \
         --output_dir $4 \
@@ -15,7 +15,6 @@ CUDA_VISIBLE_DEVICES=$1,$2 python -m torch.distributed.launch --master_port $3 -
         --per_device_train_batch_size 4 \
         --do_train \
         --do_eval \
-        --do_predict \
         --lang zh \
         --num_train_epochs 100 \
         --logging_steps 5 \

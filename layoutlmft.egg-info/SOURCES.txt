@@ -24,6 +24,7 @@ layoutlmft/data/datasets/myxfunsplit_avg.py
 layoutlmft/data/datasets/myxfunsplit_new.py
 layoutlmft/data/datasets/myxfunsplit_table.py
 layoutlmft/data/datasets/xfun.py
+layoutlmft/data/datasets/xfun_new.py
 layoutlmft/models/__init__.py
 layoutlmft/models/model_args.py
 layoutlmft/models/layoutlm/__init__.py

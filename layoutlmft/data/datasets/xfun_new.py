@@ -9,11 +9,11 @@ from layoutlmft.data.utils import load_image, merge_bbox, normalize_bbox, simpli
 from layoutlmft.data.utils import *
 from transformers import AutoTokenizer
 from copy import deepcopy
-_URL = "/home/zhanghang-s21/data/bishe/MYXFUND/"
+_URL = "/home/zhanghang-s21/data/DATA/xfund-and-funsd/XFUND-and-FUNSD/"
 
-_MYURL = "/home/zhanghang-s21/data/bishe/nowdataset/"
+_MYURL = "/home/zhanghang-s21/data/DATA/xfund-and-funsd/XFUND-and-FUNSD/"
 
-_LANG = ["zh"]
+_LANG = ["zh", "de", "es", "fr", "en", "it", "ja", "pt"]
 logger = logging.getLogger(__name__)
 
 
@@ -41,17 +41,17 @@ class XFUN(datasets.GeneratorBasedBuilder):
     column_id_max = -1
     group_id_max = -1
     index_id_max = -1
-    BUILDER_CONFIGS = [XFUNConfig(name=f"myxfunsplit_new.{lang}", lang=lang) for lang in _LANG]
-    ocr_data = {}
-    input_ocr = ["/home/zhanghang-s21/data/bishe/ocr_data/aistrong_ocr_train", \
-                "/home/zhanghang-s21/data/bishe/ocr_data/aistrong_ocr_mytrain", \
-                "/home/zhanghang-s21/data/bishe/ocr_data/aistrong_ocr_val"]
-    for filepath in input_ocr:
-        with open(filepath, "r") as f:
-            for line in f:
-                name, data = line.split('\t')
-                name = name.replace('.pdf','.jpg')
-                ocr_data[name] = json.loads(data)
+    BUILDER_CONFIGS = [XFUNConfig(name=f"xfun_new.{lang}", lang=lang) for lang in _LANG]
+    # ocr_data = {}
+    # input_ocr = ["/home/zhanghang-s21/data/bishe/ocr_data/aistrong_ocr_train", \
+    #             "/home/zhanghang-s21/data/bishe/ocr_data/aistrong_ocr_mytrain", \
+    #             "/home/zhanghang-s21/data/bishe/ocr_data/aistrong_ocr_val"]
+    # for filepath in input_ocr:
+    #     with open(filepath, "r") as f:
+    #         for line in f:
+    #             name, data = line.split('\t')
+    #             name = name.replace('.pdf','.jpg')
+    #             ocr_data[name] = json.loads(data)
     tokenizer = AutoTokenizer.from_pretrained("/home/zhanghang-s21/data/model/xlm-roberta-base")
     # tokenizer.add_tokens(['<LONGTERM>'], special_tokens=True)
 
@@ -65,7 +65,7 @@ class XFUN(datasets.GeneratorBasedBuilder):
                     "bbox": datasets.Sequence(datasets.Sequence(datasets.Value("int64"))),
                     "labels": datasets.Sequence(
                         datasets.ClassLabel(
-                            names=["QUESTION", "ANSWER", "HEADER", "SINGLE", "ANSWERNUM"]
+                            names=["QUESTION", "ANSWER", "HEADER", "OTHER"]
                         )
                     ),
                     "image": datasets.Array3D(shape=(3, 224, 224), dtype="uint8"),
@@ -73,7 +73,7 @@ class XFUN(datasets.GeneratorBasedBuilder):
                         {
                             "start": datasets.Value("int64"),
                             "end": datasets.Value("int64"),
-                            "label": datasets.ClassLabel(names=["HEADER", "QUESTION", "ANSWER", "SINGLE", "ANSWERNUM"]),
+                            "label": datasets.ClassLabel(names=["HEADER", "QUESTION", "ANSWER","OTHER"]),
                             "id":datasets.Value(dtype='string'),
                             "row_id":datasets.Value("int64"),
                             "column_id":datasets.Value("int64"),
@@ -103,9 +103,9 @@ class XFUN(datasets.GeneratorBasedBuilder):
             # "train": [f"{_URL}{self.config.lang}_train.align.json", f"{_URL}{self.config.lang}.train.zip"],
             # "val": [f"{_URL}{self.config.lang}_val.align.json", f"{_URL}{self.config.lang}.val.zip"],
             # /home/zhanghang-s21/data/bishe/MYXFUND/mytrain.align.json
-            "train": [f"{_URL}mytrain.new.align.json", f"{_URL}mytrain.zip"], # mytrain.new.align.json'
-            "val": [f"{_URL}myval.new.align.json", f"{_URL}myval.zip"],
-            "test": [f"{_URL}mytest.new.align.json", f"{_URL}mytest.zip"],
+            "train": [f"{_URL}{self.config.lang}.train.json", f"{_URL}{self.config.lang}.train.zip"],
+            "val": [f"{_URL}{self.config.lang}.val.json", f"{_URL}{self.config.lang}.val.zip"],
+            # "test": [f"{_URL}mytest.new.align.json", f"{_URL}mytest.zip"],
             # "val": [f"{_URL}myval.align.ner.json", f"{_URL}myval.zip"],
         
             # "val": [f"{_URL}myval.ner.json", f"{_URL}myval.zip"],
@@ -118,7 +118,7 @@ class XFUN(datasets.GeneratorBasedBuilder):
         downloaded_files = dl_manager.download_and_extract(urls_to_download)
         train_files_for_many_langs = [downloaded_files["train"]]
         val_files_for_many_langs = [downloaded_files["val"]]
-        test_files_for_many_langs = [downloaded_files["test"]]
+        # test_files_for_many_langs = [downloaded_files["test"]]
         if self.config.additional_langs:
             additional_langs = self.config.additional_langs.split("+")
             if "all" in additional_langs:
@@ -138,7 +138,7 @@ class XFUN(datasets.GeneratorBasedBuilder):
                 name=datasets.Split.VALIDATION, gen_kwargs={"filepaths": val_files_for_many_langs, \
                     "MODE":"val"}
             ),
-            datasets.SplitGenerator(name=datasets.Split.TEST, gen_kwargs={"filepaths": test_files_for_many_langs,"MODE":"val"}),
+            # datasets.SplitGenerator(name=datasets.Split.TEST, gen_kwargs={"filepaths": test_files_for_many_langs,"MODE":"val"}),
         ]
 
 
@@ -210,7 +210,7 @@ class XFUN(datasets.GeneratorBasedBuilder):
         return new_groups,x_index,y_index
 
 
-    def get_groups(self, MODE, doc, tables, size):
+    def get_groups(self, MODE, doc, size):
         # print("get_groups")
         document = doc["document"]
         id = doc['id']
@@ -218,7 +218,8 @@ class XFUN(datasets.GeneratorBasedBuilder):
         # tables = ocr_data[id][0]['tables']
         boxes_src = []
         group_src = []
-        ocr_width, ocr_height, image_width, image_height = get_image(MODE,id)
+        boxes = []
+        # ocr_width, ocr_height, image_width, image_height = get_image(MODE,id)
         doc_tp = deepcopy(document)
         group_index = {}
         group_id = 0
@@ -227,57 +228,55 @@ class XFUN(datasets.GeneratorBasedBuilder):
         x_index_src_new = []
         y_index_src_new = []
         
-        for table_id, table in enumerate(tables):
-            group_src = []
-            boxes = []
-            table_bbox =  normalizebbox(table['bbox'], ocr_width, ocr_height,image_width, image_height)
-            
-            i = 0
-            while i < len(doc_tp):
-                line =  doc_tp[i]
-                bbox = line['box']
-                if bbox_overlap(table_bbox,bbox):
-                    boxes.append((bbox[1], bbox, line))
-                    doc_tp.pop(i)
-                    i-=1
-                i+=1
-
-            boxes = sorted(boxes, key=lambda x: x[0])
-            boxes_tmp = deepcopy(boxes)
-            groups,x_index,y_index = self.get_groups_from_boxes(boxes_tmp)
-            # 行检测
-            boxes = []
-            for group in groups:
-                group_src.append(group)
-                for box, line in group:
-                    # print(line['text'])
-                    boxes.append(line)
-                group_index[group_id] = len(boxes_src) + len(boxes)
-                group_id += 1
-            boxes_src.extend(boxes)
-            group_src_new.append(group_src)
-            x_index_src_new.append(x_index)
-            y_index_src_new.append(y_index)
-        
-        group_src = []     
+        #for table_id, table in enumerate(tables):
+        group_src = []
         boxes = []
+       #  table_bbox =  normalizebbox(table['bbox'], ocr_width, ocr_height,image_width, image_height)
+        
         i = 0
         while i < len(doc_tp):
             line =  doc_tp[i]
             bbox = line['box']
+            #if bbox_overlap(table_bbox,bbox):
             boxes.append((bbox[1], bbox, line))
             i+=1
+
         boxes = sorted(boxes, key=lambda x: x[0])
-        groups,x_index,y_index = self.get_groups_from_boxes(boxes)
-        
+        boxes_tmp = deepcopy(boxes)
+        groups,x_index,y_index = self.get_groups_from_boxes(boxes_tmp)
+        # 行检测
         boxes = []
         for group in groups:
             group_src.append(group)
             for box, line in group:
+                # print(line['text'])
                 boxes.append(line)
             group_index[group_id] = len(boxes_src) + len(boxes)
             group_id += 1
         boxes_src.extend(boxes)
+        group_src_new.append(group_src)
+        x_index_src_new.append(x_index)
+        y_index_src_new.append(y_index)
+        
+        group_src = []     
+        boxes = []
+        # i = 0
+        # while i < len(doc_tp):
+        #     line =  doc_tp[i]
+        #     bbox = line['box']
+        #     boxes.append((bbox[1], bbox, line))
+        #     i+=1
+        #boxes = sorted(boxes, key=lambda x: x[0])
+        #groups,x_index,y_index = self.get_groups_from_boxes(boxes)
+        
+        # boxes = []
+        # for group in groups:
+        #     group_src.append(group)
+        #     for box, line in group:
+        #         boxes.append(line)
+        #     group_index[group_id] = len(boxes_src) + len(boxes)
+        #     group_id += 1
+        # boxes_src.extend(boxes)
         if len(group_src) > 0:
             group_src_new.append(group_src)
             x_index_src_new.append(x_index)
@@ -366,9 +365,33 @@ class XFUN(datasets.GeneratorBasedBuilder):
                         return_attention_mask=False,
                     )
 
-                id2label[line["id"]] = line["label"]     
-                bbox= [(normalize_bbox(simplify_bbox(line["box"]), size))] * len(tokenized_inputs["input_ids"])
+                id2label[line["id"]] = line["label"]
+                text_length = 0
+                ocr_length = 0
+                bbox = []
+                last_box = None     
+                for token_id, offset in zip(tokenized_inputs["input_ids"], tokenized_inputs["offset_mapping"]):
+                    if token_id == 6:
+                        bbox.append(None)
+                        continue
+                    text_length += offset[1] - offset[0]
+                    tmp_box = []
+                    while ocr_length < text_length:
+                        ocr_word = line["words"].pop(0)
+                        ocr_length += len(
+                            self.tokenizer._tokenizer.normalizer.normalize_str(ocr_word["text"].strip())
+                        )
+                        tmp_box.append(simplify_bbox(ocr_word["box"]))
+                    if len(tmp_box) == 0:
+                        tmp_box = last_box
+                    bbox.append(normalize_bbox(merge_bbox(tmp_box), size))
+                    last_box = tmp_box
+                bbox = [
+                    [bbox[i + 1][0], bbox[i + 1][1], bbox[i + 1][0], bbox[i + 1][1]] if b is None else b
+                    for i, b in enumerate(bbox)
+                ]
                 label = [f"{line['label'].upper()}"] * len(tokenized_inputs["input_ids"])
+                assert len(bbox) == len(label)
                 tokenized_inputs.update({"bbox": bbox, "labels": label})
                 # entity_id_to_index_map[line["id"]] = pre + len(group_entities)
                 
@@ -399,11 +422,11 @@ class XFUN(datasets.GeneratorBasedBuilder):
 
         maxsteps = 512
         import math
-        # if group_total_len > 512:
-        #     j = math.ceil(group_total_len/512)
-        #     maxsteps = min(512 // j + 50, 512)
-        #     if group_max_len > maxsteps:
-        #         maxsteps = min(group_max_len+50,512)
+        if group_total_len > 512:
+            j = math.ceil(group_total_len/512)
+            maxsteps = min(512 // j + 50, 512)
+            if group_max_len > maxsteps:
+                maxsteps = min(group_max_len+50,512)
         while len(group_doc_src) > 0:
             i = 0
             # print(len(group_doc_src))
@@ -496,7 +519,7 @@ class XFUN(datasets.GeneratorBasedBuilder):
     
     def _generate_examples(self, filepaths, MODE):
         print(filepaths)
-        ocr_data = self.ocr_data
+        # ocr_data = self.ocr_data
         items = []
 
                 
@@ -518,9 +541,9 @@ class XFUN(datasets.GeneratorBasedBuilder):
                 else:
                     pass
                     # continue
-                tables = ocr_data[id][0]['tables']
+                # tables = ocr_data[id][0]['tables']
                 image, size = load_image(doc["img"]["fpath"])
-                group_src_new,x_index_src_new,y_index_src_new  = self.get_groups(MODE, doc, tables, size)
+                group_src_new,x_index_src_new,y_index_src_new  = self.get_groups(MODE, doc, size)
                 index_n = -1
                 for group_n,group_src in enumerate(group_src_new):
                     x_index,y_index = x_index_src_new[group_n],y_index_src_new[group_n]

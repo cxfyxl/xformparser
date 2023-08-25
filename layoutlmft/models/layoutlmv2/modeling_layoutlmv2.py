@@ -924,6 +924,7 @@ class FocalLoss(nn.Module):
                 self.alpha = alpha
             else:
                 self.alpha = Variable(alpha)
+        self.softmax = torch.nn.Softmax(dim=-1)
         self.gamma = gamma
         self.class_num = class_num
         self.size_average = size_average
@@ -931,7 +932,7 @@ class FocalLoss(nn.Module):
     def forward(self, inputs, targets):
         N = inputs.size(0)
         C = inputs.size(1)
-        P = F.softmax(inputs)
+        P = self.softmax(inputs)
 
         class_mask = inputs.data.new(N, C).fill_(0)
         class_mask = Variable(class_mask)
@@ -992,8 +993,8 @@ class MulticlassDiceLoss(nn.Module):
  
 		C = target.shape[1]
  
-		# if weights is None:
-		# 	weights = torch.ones(C) #uniform weights for all classes
+		if weights is None:
+			weights = torch.ones(C) #uniform weights for all classes
  
 		dice = DiceLoss()
 		totalLoss = 0
@@ -1547,11 +1548,13 @@ class LayoutLMv2ForJointCellClassification(LayoutLMv2PreTrainedModel):
         self.y_position_embeddings = nn.Embedding(config.max_2d_position_embeddings, config.coordinate_size)
         self.ner_dense_layer = nn.Linear(config.hidden_size,config.hidden_size)
         self.re_dense_layer = nn.Linear(config.hidden_size,config.hidden_size)
-        
+        self.activate_func = nn.ReLU()
         self.row_embeddding = self.extractor.re_embedding.row_embeddding
         self.column_embeddding = self.extractor.re_embedding.column_embeddding
         self.softmax = torch.nn.Softmax(dim=-1)
         self.loss_fct = CrossEntropyLoss()
+        self.facal_loss = FocalLoss(class_num=config.num_labels)
+        self.dice_loss = MulticlassDiceLoss()
         self.adaptive_loss = self.extractor.adaptive_loss
         self.multi_task = self.extractor.multi_task
         self.log_var_ner = torch.nn.Parameter(torch.zeros((1,), requires_grad=True))
@@ -1581,6 +1584,7 @@ class LayoutLMv2ForJointCellClassification(LayoutLMv2PreTrainedModel):
         inputs_embeds=None,
         relations=None,
         labels=None,
+        ner_labels=None,
         output_attentions=None,
         output_hidden_states=None,
         return_dict=None,
@@ -1624,10 +1628,16 @@ class LayoutLMv2ForJointCellClassification(LayoutLMv2PreTrainedModel):
         #         ner_loss = self.loss_fct(active_logits, active_labels)
         #     else:
         #         ner_loss = self.loss_fct(token_logits.view(-1, self.num_labels), labels.view(-1))
+        ner_hidden_states = sequence_output
         # ner_hidden_states = self.ner_dense_layer(sequence_output)
-        # re_hidden_states = self.re_dense_layer(sequence_output)
+        # ner_hidden_states = self.activate_func(ner_hidden_states)
         # ner_hidden_states = self.dropout(ner_hidden_states)
+        
+        re_hidden_states = sequence_output
+        # re_hidden_states = self.re_dense_layer(sequence_output)
+        # re_hidden_states = self.activate_func(re_hidden_states)
         # re_hidden_states = self.dropout(re_hidden_states)
+
         # sequence_output = ner_hidden_states
 
         for b in range(batch_size):
@@ -1653,7 +1663,7 @@ class LayoutLMv2ForJointCellClassification(LayoutLMv2PreTrainedModel):
                 #     dim=-1,
                 # ).view(1,context_dim*2)
                 # temp_repr = sequence_output[b][start_index:end_index].max(dim=0)[0].view(1,context_dim)
-                temp_repr = sequence_output[b][start_index:end_index].mean(dim=0).view(1,context_dim) # + torch.cat((row_repr,column_repr),dim=-1).view(1,context_dim)
+                temp_repr = ner_hidden_states[b][start_index:end_index].mean(dim=0).view(1,context_dim) # + torch.cat((row_repr,column_repr),dim=-1).view(1,context_dim)
                 entity_repr = temp_repr if entity_repr == None else torch.cat([entity_repr,temp_repr],dim=0)
                 
                 
@@ -1666,11 +1676,12 @@ class LayoutLMv2ForJointCellClassification(LayoutLMv2PreTrainedModel):
             if self.adaptive_loss:
                 ner_loss += self.criterion(logits,entities_labels,self.log_var_ner, device)
             else:
+                # ner_loss += self.facal_loss(logits, entities_labels)
                 ner_loss += self.loss_fct(logits, entities_labels)
             all_logits.append(logits)
         # sequence_output re_hidden_states
         # sequence_output
-        re_loss, pred_relations = self.extractor(sequence_output, bbox, copy.deepcopy(pred_entities), entities, relations, epoch, all_logits)
+        re_loss, pred_relations = self.extractor(re_hidden_states, bbox, copy.deepcopy(pred_entities), entities, relations, epoch, all_logits)
         gamma = 0.33
         loss = ner_loss + re_loss
         # loss = re_loss

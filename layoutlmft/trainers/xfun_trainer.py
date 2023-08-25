@@ -102,7 +102,23 @@ from transformers.trainer_utils import (
 )
 
 
-
+label2ids =  {
+    'O':0,
+    'B-HEADER':1,
+    'I-HEADER':2,
+    'B-QUESTION':3,
+    'I-QUESTION':4,
+    'B-ANSWER':5,
+    'I-ANSWER':6,
+}
+ids2label = ['O','B-HEADER','I-HEADER','B-QUESTION','I-QUESTION','B-ANSWER','I-ANSWER']
+XFund_label2ids = {
+    'HEADER':0,
+    'QUESTION':1,
+    'ANSWER':2,
+    'OTHER':3,
+    # "ANSWERNUM":4,
+}
 
 if version.parse(torch.__version__) >= version.parse("1.6"):
     _is_native_amp_available = True
@@ -652,12 +668,40 @@ class XfunJointTrainer(FunsdTrainer):
         pred_relations = None
         pred_entities = None
         entities = None
+
+
+        def get_pred_ner_labels(entity):
+            pred_ner_label = []
+            for l, r, entity_label in zip(entity['start'],entity['end'],entity['label']):
+                if entity_label == 0:
+                    pred_ner_label.append(label2ids['B-HEADER'])
+                    pred_ner_label.extend([label2ids['I-HEADER']]*(r-l-1))
+                elif entity_label == 1:
+                    pred_ner_label.append(label2ids['B-QUESTION'])
+                    pred_ner_label.extend([label2ids['I-QUESTION']]*(r-l-1))
+                elif entity_label == 2:
+                    pred_ner_label.append(label2ids['B-ANSWER'])
+                    pred_ner_label.extend([label2ids['I-ANSWER']]*(r-l-1))
+                elif entity_label == 3:
+                    #pred_ner_label.append(label2ids['B-HEADER'])
+                    pred_ner_label.extend([label2ids['O']]*(r-l))
+            return pred_ner_label
+                
+        pred_nertag_labels = []
+        nertag_labels = []
         for step, inputs in enumerate(dataloader):
             outputs, labels = self.prediction_step(model, inputs, prediction_loss_only, ignore_keys=ignore_keys)
             re_labels = labels[1] if re_labels is None else re_labels + labels[1]
+            nertag_labels.extend(inputs['ner_labels'].cpu().numpy().tolist())
+            # ner_labels = inputs['ner_labels'] if ner_labels is None else ner_labels + inputs['ner_labels']
             pred_relations = (
                 outputs.pred_relations if pred_relations is None else pred_relations + outputs.pred_relations
             )
+            for entity in outputs.pred_entities:
+                pred_ner_label = get_pred_ner_labels(entity)
+                pred_nertag_labels.append(pred_ner_label)
+            
+
             entities = outputs.entities if entities is None else entities + outputs.entities
             pred_entities = outputs.pred_entities if pred_entities is None else pred_entities + outputs.pred_entities
             self.control = self.callback_handler.on_prediction_step(self.args, self.state, self.control)
@@ -681,17 +725,35 @@ class XfunJointTrainer(FunsdTrainer):
 
             gt_relations.append(rel_sent)
         ner_labels,ner_pred_labels = None,None
+        pred_ner_label = []
         for i in range(len(entities)):
             if len(entities[i]['label']) == 0:
                 continue
             ner_labels = entities[i]['label'] if ner_labels is None else ner_labels + entities[i]['label']
             ner_pred_labels = pred_entities[i]['label'] if ner_pred_labels is None else ner_pred_labels + pred_entities[i]['label']
+
             if len(entities[i]['label']) != len(pred_entities[i]['label']):
                 print("wrong in len")      
         ner_metrics = accuracy_score(ner_labels,ner_pred_labels)
         re_metrics = self.compute_metrics(EvalPrediction(predictions=pred_relations, label_ids=gt_relations))
 
+
+        # label_metric = evaluate.load("/home/zhanghang-s21/data/mycache/metrics/seqeval")
+        true_predictions = [
+            [ids2label[l] for l in prediction if l != -100]
+            for prediction in pred_nertag_labels
+        ]
+        true_labels = [
+            [ids2label[l] for l in prediction if l != -100]
+            for prediction in nertag_labels
+        ]
+        # true_labels = [
+        #     [label_list[l] for (p, l) in zip(prediction, label) if l != -100]
+        #     for prediction, label in zip(predictions, labels)
+        # ]
+        # results = label_metric.compute(predictions=true_predictions, references=true_labels)
         re_metrics = {
+            # "nertag_f1":results['overall_f1'],
             "ner_precision":ner_metrics,
             "precision": re_metrics["ALL"]["p"],
             "recall": re_metrics["ALL"]["r"],
@@ -780,6 +842,336 @@ class XfunJointTrainer(FunsdTrainer):
         self.args.local_rank = -1
         eval_dataloader = self.get_eval_dataloader(eval_dataset)
         self.args.local_rank = torch.distributed.get_rank()
+
+        start_time = time.time()
+
+        metrics = self.prediction_loop(
+            eval_dataloader,
+            description="Evaluation",
+            # No point gathering the predictions if there are no metrics, otherwise we defer to
+            # self.args.prediction_loss_only
+            prediction_loss_only=True if self.compute_metrics is None else None,
+            ignore_keys=ignore_keys,
+            metric_key_prefix=metric_key_prefix,
+        )
+
+        n_samples = len(eval_dataset if eval_dataset is not None else self.eval_dataset)
+        metrics.update(speed_metrics(metric_key_prefix, start_time, n_samples))
+        self.log(metrics)
+        self.control = self.callback_handler.on_evaluate(self.args, self.state, self.control, metrics)
+    
+        return metrics
+
+
+
+    def compute_loss(self, model, inputs, return_outputs=False):
+        """
+        How the loss is computed by Trainer. By default, all models return the loss in the first element.
+
+        Subclass and override for custom behavior.
+        """
+        if self.label_smoother is not None and "labels" in inputs:
+            labels = inputs.pop("labels")
+        else:
+            labels = None
+        inputs['epoch'] = self.state.epoch
+        # self.state.epoch
+        outputs = model(**inputs)
+        # Save past state if it exists
+        # TODO: this needs to be fixed and made cleaner later.
+        if self.args.past_index >= 0:
+            self._past = outputs[self.args.past_index]
+
+        if labels is not None:
+            loss = self.label_smoother(outputs, labels)
+        else:
+            # We don't use .loss here since the model may return tuples instead of ModelOutput.
+            loss = outputs["loss"] if isinstance(outputs, dict) else outputs[0]
+            if "ner_loss" in outputs.keys():
+                ner_loss = outputs["ner_loss"] if isinstance(outputs, dict) else outputs[0]
+                re_loss = outputs["re_loss"] if isinstance(outputs, dict) else outputs[0]
+                log_var_ner = outputs["log_var_ner"] if isinstance(outputs, dict) else outputs[0]
+                log_var_re = outputs["log_var_re"] if isinstance(outputs, dict) else outputs[0]
+                self.log({"ner_loss": ner_loss.item(),"re_loss":re_loss.item(),"log_var_ner":log_var_re.item(),"log_var_re":log_var_re.item()})
+
+        return (loss, outputs) if return_outputs else loss
+    
+
+    def _maybe_log_save_evaluate(self, tr_loss, model, trial, epoch):
+        if self.control.should_log:
+            logs: Dict[str, float] = {}
+            tr_loss_scalar = tr_loss.item()
+            # reset tr_loss to zero
+            tr_loss -= tr_loss
+
+            logs["loss"] = round(tr_loss_scalar / (self.state.global_step - self._globalstep_last_logged), 4)
+            logs["learning_rate"] = self._get_learning_rate()
+            self._total_loss_scalar += tr_loss_scalar
+            self._globalstep_last_logged = self.state.global_step
+
+            self.log(logs)
+
+        metrics = None
+        if self.control.should_evaluate:
+            metrics = self.evaluate()
+            self._report_to_hp_search(trial, epoch, metrics)
+            if self.test_dataset != None:
+                predictions, labels, test_metrics = self.predict(self.test_dataset)
+                self._report_to_hp_search(trial, epoch, test_metrics)
+        if self.control.should_save:
+            self._save_checkpoint(model, trial, metrics=metrics)
+            self.control = self.callback_handler.on_save(self.args, self.state, self.control)
+
+
+
+
+
+class XfunJointTrainerXfund(FunsdTrainer):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.label_names.append("relations")
+        self.test_dataset = None
+
+    def prediction_step(
+        self,
+        model: nn.Module,
+        inputs: Dict[str, Union[torch.Tensor, Any]],
+        prediction_loss_only: bool,
+        ignore_keys: Optional[List[str]] = None,
+    ) -> Tuple[Optional[float], Optional[torch.Tensor], Optional[torch.Tensor]]:
+        inputs = self._prepare_inputs(inputs)
+
+        with torch.no_grad():
+            if self.use_amp:
+                with autocast():
+                    outputs = model(**inputs)
+            else:
+                outputs = model(**inputs)
+        labels = tuple(inputs.get(name) for name in self.label_names)
+        return outputs, labels
+
+    def prediction_loop(
+        self,
+        dataloader: DataLoader,
+        description: str,
+        prediction_loss_only: Optional[bool] = None,
+        ignore_keys: Optional[List[str]] = None,
+        metric_key_prefix: str = "eval",
+    ) -> PredictionOutput:
+        """
+        Prediction/evaluation loop, shared by :obj:`Trainer.evaluate()` and :obj:`Trainer.predict()`.
+
+        Works both with or without labels.
+        """
+        if not isinstance(dataloader.dataset, collections.abc.Sized):
+            raise ValueError("dataset must implement __len__")
+        prediction_loss_only = (
+            prediction_loss_only if prediction_loss_only is not None else self.args.prediction_loss_only
+        )
+
+        if self.args.deepspeed and not self.args.do_train:
+            # no harm, but flagging to the user that deepspeed config is ignored for eval
+            # flagging only for when --do_train wasn't passed as only then it's redundant
+            logger.info("Detected the deepspeed argument but it will not be used for evaluation")
+
+        model = self._wrap_model(self.model, training=False)
+
+        # if full fp16 is wanted on eval and this ``evaluation`` or ``predict`` isn't called while
+        # ``train`` is running, half it first and then put on device
+        if not self.is_in_train and self.args.fp16_full_eval:
+            model = model.half().to(self.args.device)
+
+        batch_size = dataloader.batch_size
+        num_examples = self.num_examples(dataloader)
+        logger.info("***** Running %s *****", description)
+        logger.info("  Num examples = %d", num_examples)
+        logger.info("  Batch size = %d", batch_size)
+
+        model.eval()
+
+        self.callback_handler.eval_dataloader = dataloader
+
+        re_labels = None
+        pred_relations = None
+        pred_entities = None
+        entities = None
+
+
+        def get_pred_ner_labels(entity):
+            pred_ner_label = []
+            for l, r, entity_label in zip(entity['start'],entity['end'],entity['label']):
+                if entity_label == 0:
+                    pred_ner_label.append(label2ids['B-HEADER'])
+                    pred_ner_label.extend([label2ids['I-HEADER']]*(r-l-1))
+                elif entity_label == 1:
+                    pred_ner_label.append(label2ids['B-QUESTION'])
+                    pred_ner_label.extend([label2ids['I-QUESTION']]*(r-l-1))
+                elif entity_label == 2:
+                    pred_ner_label.append(label2ids['B-ANSWER'])
+                    pred_ner_label.extend([label2ids['I-ANSWER']]*(r-l-1))
+                elif entity_label == 3:
+                    #pred_ner_label.append(label2ids['B-HEADER'])
+                    pred_ner_label.extend([label2ids['O']]*(r-l))
+            return pred_ner_label
+                
+        pred_nertag_labels = []
+        nertag_labels = []
+        for step, inputs in enumerate(dataloader):
+            outputs, labels = self.prediction_step(model, inputs, prediction_loss_only, ignore_keys=ignore_keys)
+            re_labels = labels[1] if re_labels is None else re_labels + labels[1]
+            nertag_labels.extend(inputs['ner_labels'].cpu().numpy().tolist())
+            # ner_labels = inputs['ner_labels'] if ner_labels is None else ner_labels + inputs['ner_labels']
+            pred_relations = (
+                outputs.pred_relations if pred_relations is None else pred_relations + outputs.pred_relations
+            )
+            for entity in outputs.pred_entities:
+                pred_ner_label = get_pred_ner_labels(entity)
+                pred_nertag_labels.append(pred_ner_label)
+            
+
+            entities = outputs.entities if entities is None else entities + outputs.entities
+            pred_entities = outputs.pred_entities if pred_entities is None else pred_entities + outputs.pred_entities
+            self.control = self.callback_handler.on_prediction_step(self.args, self.state, self.control)
+
+        gt_relations = []
+        for b in range(len(re_labels)):
+            rel_sent = []
+            for head, tail in zip(re_labels[b]["head"], re_labels[b]["tail"]):
+                rel = {}
+                rel["head_id"] = head
+                rel["head"] = (entities[b]["start"][rel["head_id"]], entities[b]["end"][rel["head_id"]])
+                rel["head_type"] = entities[b]["label"][rel["head_id"]]
+
+                rel["tail_id"] = tail
+                rel["tail"] = (entities[b]["start"][rel["tail_id"]], entities[b]["end"][rel["tail_id"]])
+                rel["tail_type"] = entities[b]["label"][rel["tail_id"]]
+
+                rel["type"] = 1
+
+                rel_sent.append(rel)
+
+            gt_relations.append(rel_sent)
+        ner_labels,ner_pred_labels = None,None
+        pred_ner_label = []
+        for i in range(len(entities)):
+            if len(entities[i]['label']) == 0:
+                continue
+            ner_labels = entities[i]['label'] if ner_labels is None else ner_labels + entities[i]['label']
+            ner_pred_labels = pred_entities[i]['label'] if ner_pred_labels is None else ner_pred_labels + pred_entities[i]['label']
+
+            if len(entities[i]['label']) != len(pred_entities[i]['label']):
+                print("wrong in len")      
+        ner_metrics = accuracy_score(ner_labels,ner_pred_labels)
+        re_metrics = self.compute_metrics(EvalPrediction(predictions=pred_relations, label_ids=gt_relations))
+
+
+        label_metric = evaluate.load("/home/zhanghang-s21/data/mycache/metrics/seqeval")
+        true_predictions = [
+            [ids2label[l] for l in prediction if l != -100]
+            for prediction in pred_nertag_labels
+        ]
+        true_labels = [
+            [ids2label[l] for l in prediction if l != -100]
+            for prediction in nertag_labels
+        ]
+        # true_labels = [
+        #     [label_list[l] for (p, l) in zip(prediction, label) if l != -100]
+        #     for prediction, label in zip(predictions, labels)
+        # ]
+        results = label_metric.compute(predictions=true_predictions, references=true_labels)
+        re_metrics = {
+            "nertag_f1":results['overall_f1'],
+            "ner_precision":ner_metrics,
+            "precision": re_metrics["ALL"]["p"],
+            "recall": re_metrics["ALL"]["r"],
+            "f1": re_metrics["ALL"]["f1"],
+        }
+        re_metrics[f"{metric_key_prefix}_loss"] = outputs.loss.mean().item()
+
+        metrics = {}
+
+        # # Prefix all keys with metric_key_prefix + '_'
+        for key in list(re_metrics.keys()):
+            if not key.startswith(f"{metric_key_prefix}_"):
+                metrics[f"{metric_key_prefix}_{key}"] = re_metrics.pop(key)
+            else:
+                metrics[f"{key}"] = re_metrics.pop(key)
+        if metric_key_prefix == "test":
+            return pred_relations, gt_relations, metrics
+        return metrics
+    
+    def predict(
+        self,
+        test_dataset: Optional[Dataset] = None,
+        ignore_keys: Optional[List[str]] = None,
+        metric_key_prefix: str = "test",  
+    ):
+        if test_dataset is not None and not isinstance(test_dataset, collections.abc.Sized):
+            raise ValueError("eval_dataset must implement __len__")
+
+        self.args.local_rank = -1
+        test_dataloader = self.get_test_dataloader(test_dataset)
+        # 不使用多卡
+        self.args.local_rank = torch.distributed.get_rank()
+
+        start_time = time.time()
+
+        predictions, labels, metrics = self.prediction_loop(
+            test_dataloader,
+            description="test",
+            # No point gathering the predictions if there are no metrics, otherwise we defer to
+            # self.args.prediction_loss_only
+            prediction_loss_only=True if self.compute_metrics is None else None,
+            ignore_keys=ignore_keys,
+            metric_key_prefix=metric_key_prefix,
+        )
+
+        n_samples = len(test_dataset if test_dataset is not None else self.eval_dataset)
+        metrics.update(speed_metrics(metric_key_prefix, start_time, n_samples))
+        self.log(metrics)
+        self.control = self.callback_handler.on_evaluate(self.args, self.state, self.control, metrics)
+
+        return predictions, labels, metrics
+    
+    def evaluate(
+        self,
+        eval_dataset: Optional[Dataset] = None,
+        ignore_keys: Optional[List[str]] = None,
+        metric_key_prefix: str = "eval",
+    ) -> Dict[str, float]:
+        """
+        Run evaluation and returns metrics.
+
+        The calling script will be responsible for providing a method to compute metrics, as they are task-dependent
+        (pass it to the init :obj:`compute_metrics` argument).
+
+        You can also subclass and override this method to inject custom behavior.
+
+        Args:
+            eval_dataset (:obj:`Dataset`, `optional`):
+                Pass a dataset if you wish to override :obj:`self.eval_dataset`. If it is an :obj:`datasets.Dataset`,
+                columns not accepted by the ``model.forward()`` method are automatically removed. It must implement the
+                :obj:`__len__` method.
+            ignore_keys (:obj:`Lst[str]`, `optional`):
+                A list of keys in the output of your model (if it is a dictionary) that should be ignored when
+                gathering predictions.
+            metric_key_prefix (:obj:`str`, `optional`, defaults to :obj:`"eval"`):
+                An optional prefix to be used as the metrics key prefix. For example the metrics "bleu" will be named
+                "eval_bleu" if the prefix is "eval" (default)
+
+        Returns:
+            A dictionary containing the evaluation loss and the potential metrics computed from the predictions. The
+            dictionary also contains the epoch number which comes from the training state.
+        """
+        if eval_dataset is not None and not isinstance(eval_dataset, collections.abc.Sized):
+            raise ValueError("eval_dataset must implement __len__")
+
+        self.args.local_rank = -1
+        eval_dataloader = self.get_eval_dataloader(eval_dataset)
+        try:
+            self.args.local_rank = torch.distributed.get_rank()
+        except Exception as e:
+            pass 
 
         start_time = time.time()
 

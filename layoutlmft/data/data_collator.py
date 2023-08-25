@@ -45,8 +45,9 @@ class DataCollatorForKeyValueExtraction:
 
     def __call__(self, features):
         label_name = "label" if "label" in features[0].keys() else "labels"
+        ner_labels_name = "ner_labels" if "ner_labels" in features[0].keys() else "labels"
         labels = [feature[label_name] for feature in features] if label_name in features[0].keys() else None
-
+        ner_labels = [feature[ner_labels_name] for feature in features] if ner_labels_name in features[0].keys() else None
         has_image_input = "image" in features[0]
         has_bbox_input = "bbox" in features[0]
         if has_image_input:
@@ -69,12 +70,15 @@ class DataCollatorForKeyValueExtraction:
         padding_side = self.tokenizer.padding_side
         if padding_side == "right":
             batch["labels"] = [label + [self.label_pad_token_id] * (sequence_length - len(label)) for label in labels]
+            batch["ner_labels"] = [label + [self.label_pad_token_id] * (sequence_length - len(label)) for label in ner_labels]
             if has_bbox_input:
                 batch["bbox"] = [bbox + [[0, 0, 0, 0]] * (sequence_length - len(bbox)) for bbox in batch["bbox"]]
         else:
             batch["labels"] = [[self.label_pad_token_id] * (sequence_length - len(label)) + label for label in labels]
+            batch["ner_labels"] = [[self.label_pad_token_id] * (sequence_length - len(label)) + label for label in ner_labels]
             if has_bbox_input:
                 batch["bbox"] = [[[0, 0, 0, 0]] * (sequence_length - len(bbox)) + bbox for bbox in batch["bbox"]]
+
 
         batch = {k: torch.tensor(v, dtype=torch.int64) if isinstance(v[0], list) else v for k, v in batch.items()}
         if has_image_input:

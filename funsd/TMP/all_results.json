@@ -1,0 +1,11 @@
+{
+    "eval_f1": 0.014598540145985401,
+    "eval_loss": 4.228890895843506,
+    "eval_ner_precision": 0.11265646731571627,
+    "eval_nertag_f1": 0.014105793450881613,
+    "eval_precision": 0.18181818181818182,
+    "eval_recall": 0.0076045627376425855,
+    "eval_runtime": 37.3988,
+    "eval_samples": 50,
+    "eval_samples_per_second": 1.337
+}

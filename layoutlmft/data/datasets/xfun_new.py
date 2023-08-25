@@ -15,7 +15,22 @@ _MYURL = "/home/zhanghang-s21/data/DATA/xfund-and-funsd/XFUND-and-FUNSD/"
 
 _LANG = ["zh", "de", "es", "fr", "en", "it", "ja", "pt"]
 logger = logging.getLogger(__name__)
-
+label2ids =  {
+    "O":0,
+    'B-HEADER':1,
+    'I-HEADER':2,
+    'B-QUESTION':3,
+    'I-QUESTION':4,
+    'B-ANSWER':5,
+    'I-ANSWER':6,
+}
+XFund_label2ids = {
+    'HEADER':0,
+    'QUESTION':1,
+    'ANSWER':2,
+    'OTHER':3,
+    # "ANSWERNUM":4,
+}
 
 class XFUNConfig(datasets.BuilderConfig):
     """BuilderConfig for XFUN."""
@@ -54,7 +69,8 @@ class XFUN(datasets.GeneratorBasedBuilder):
     #             ocr_data[name] = json.loads(data)
     tokenizer = AutoTokenizer.from_pretrained("/home/zhanghang-s21/data/model/xlm-roberta-base")
     # tokenizer.add_tokens(['<LONGTERM>'], special_tokens=True)
-
+        
+    
     def _info(self):
         return datasets.DatasetInfo(
             features=datasets.Features(
@@ -63,9 +79,11 @@ class XFUN(datasets.GeneratorBasedBuilder):
                     "len": datasets.Value("int64"),
                     "input_ids": datasets.Sequence(datasets.Value("int64")),
                     "bbox": datasets.Sequence(datasets.Sequence(datasets.Value("int64"))),
-                    "labels": datasets.Sequence(
+                    "labels": datasets.Sequence(datasets.ClassLabel(names=["HEADER", "QUESTION", "ANSWER","OTHER"])),
+                    # ,
+                    "ner_labels": datasets.Sequence(
                         datasets.ClassLabel(
-                            names=["QUESTION", "ANSWER", "HEADER", "OTHER"]
+                            names=['O','B-HEADER','I-HEADER','B-QUESTION','I-QUESTION','B-ANSWER','I-ANSWER']
                         )
                     ),
                     "image": datasets.Array3D(shape=(3, 224, 224), dtype="uint8"),
@@ -96,6 +114,9 @@ class XFUN(datasets.GeneratorBasedBuilder):
         )
 
     def _split_generators(self, dl_manager):
+        logger.info(f"Training on {self.config.lang} with additional langs({self.config.additional_langs})")
+        logger.info(f"Evaluating on {self.config.lang}")
+        logger.info(f"Testing on {self.config.lang}")
         """Returns SplitGenerators."""
         urls_to_download = {
             # "train": [f"{_URL}{self.config.lang}_train.json", f"{_URL}{self.config.lang}.train.zip"],
@@ -151,6 +172,17 @@ class XFUN(datasets.GeneratorBasedBuilder):
         y_list = set()
         for tp in boxes_tmp:
             _, bbox, line = tp
+            if len(line["text"]) >= 90:
+                    # print(line["text"])
+                line["text"] = "#$$$$$$$#"
+                    # print(line["label"])
+            tokenized_inputs = self.tokenizer(
+                    line["text"],
+                    add_special_tokens=False,
+                    return_offsets_mapping=True,
+                    return_attention_mask=False,
+                )
+            line["input_ids"] = tokenized_inputs["input_ids"]
             min_y = min(min_y,bbox[3]-bbox[1])
             min_x = min(min_x,bbox[2]-bbox[0])
             x_list.add(bbox[0])
@@ -165,19 +197,26 @@ class XFUN(datasets.GeneratorBasedBuilder):
             k = 0
             while k < len(boxes_tmp):
                 _, bbox, line = boxes_tmp[k]
-                if group == []:
-                    group.append((bbox, line))
+                if len(line['text']) == 0:
                     boxes_tmp.pop(k)
                     k-=1
                 else:
-                    boxs = []
-                    for box, _ in group:
-                        boxs.append(box)
-                    group_box = merge_bbox(boxs)
-                    if get_overlap_byrelative(group_box,bbox,y_index):
-                        group.append((bbox, line)) 
+                    if group == []:
+                        group.append((bbox, line))
                         boxes_tmp.pop(k)
                         k-=1
+                    else:
+                        boxs = []
+                        for box, _ in group:
+                            boxs.append(box)
+                        group_box = merge_bbox(boxs)
+                        group_len = sum([len(i[1]['input_ids']) for i in group])
+                        if group_len + len(line['input_ids']) > 512:
+                            break
+                        if get_overlap_byrelative(group_box,bbox,y_index):
+                            group.append((bbox, line)) 
+                            boxes_tmp.pop(k)
+                            k-=1
                 k+=1
             boxs = []
             for box, _ in group:
@@ -349,7 +388,7 @@ class XFUN(datasets.GeneratorBasedBuilder):
         group_total_len = 0
         group_max_len = -1
         for groups in group_src:
-            group_doc = {"input_ids": [], "bbox": [], "labels": []}
+            group_doc = {"input_ids": [], "bbox": [], "labels": [],"ner_labels":[]}
             group_entities =[]
             # pre = len(entities)
             for group in groups:
@@ -366,33 +405,26 @@ class XFUN(datasets.GeneratorBasedBuilder):
                     )
 
                 id2label[line["id"]] = line["label"]
-                text_length = 0
-                ocr_length = 0
-                bbox = []
-                last_box = None     
-                for token_id, offset in zip(tokenized_inputs["input_ids"], tokenized_inputs["offset_mapping"]):
-                    if token_id == 6:
-                        bbox.append(None)
-                        continue
-                    text_length += offset[1] - offset[0]
-                    tmp_box = []
-                    while ocr_length < text_length:
-                        ocr_word = line["words"].pop(0)
-                        ocr_length += len(
-                            self.tokenizer._tokenizer.normalizer.normalize_str(ocr_word["text"].strip())
-                        )
-                        tmp_box.append(simplify_bbox(ocr_word["box"]))
-                    if len(tmp_box) == 0:
-                        tmp_box = last_box
-                    bbox.append(normalize_bbox(merge_bbox(tmp_box), size))
-                    last_box = tmp_box
-                bbox = [
-                    [bbox[i + 1][0], bbox[i + 1][1], bbox[i + 1][0], bbox[i + 1][1]] if b is None else b
-                    for i, b in enumerate(bbox)
-                ]
-                label = [f"{line['label'].upper()}"] * len(tokenized_inputs["input_ids"])
+
+                label_len = len(tokenized_inputs["input_ids"])
+                bbox= [(normalize_bbox(simplify_bbox(line["box"]), size))] * label_len
+
+                # label = [f"{line['label'].upper()}"] * len(tokenized_inputs["input_ids"])
+                label = [XFund_label2ids[line['label'].upper()]] * len(tokenized_inputs["input_ids"])
+                cur_label = line['label'].upper()
+                label_len = len(tokenized_inputs["input_ids"])
+                if cur_label == 'OTHER':
+                    cur_labels = ["O"] * label_len
+                    for k in range(len(cur_labels)):
+                        cur_labels[k] = label2ids[cur_labels[k]]
+                else:
+                    cur_labels = [cur_label] * label_len
+                    cur_labels[0] = label2ids['B-' + cur_labels[0]]
+                    for k in range(1, len(cur_labels)):
+                        cur_labels[k] = label2ids['I-' + cur_labels[k]]
+                ner_label = cur_labels
                 assert len(bbox) == len(label)
-                tokenized_inputs.update({"bbox": bbox, "labels": label})
+                tokenized_inputs.update({"bbox": bbox, "labels": label, "ner_labels":ner_label})
                 # entity_id_to_index_map[line["id"]] = pre + len(group_entities)
                 
                 group_entities.append(
@@ -421,16 +453,16 @@ class XFUN(datasets.GeneratorBasedBuilder):
         relations_src = []
 
         maxsteps = 512
-        import math
-        if group_total_len > 512:
-            j = math.ceil(group_total_len/512)
-            maxsteps = min(512 // j + 50, 512)
-            if group_max_len > maxsteps:
-                maxsteps = min(group_max_len+50,512)
+        # import math
+        # if group_total_len > 512:
+        #     j = math.ceil(group_total_len/512)
+        #     maxsteps = min(512 // j + 50, 512)
+        #     if group_max_len > maxsteps:
+        #         maxsteps = min(group_max_len+50,512)
         while len(group_doc_src) > 0:
             i = 0
             # print(len(group_doc_src))
-            tokenized_doc = {"input_ids": [],"bbox": [], "labels": []}
+            tokenized_doc = {"input_ids": [],"bbox": [], "labels": [], "ner_labels":[]}
             entity_id_to_index_map = {}
             entities = []
             relations = []
@@ -521,7 +553,9 @@ class XFUN(datasets.GeneratorBasedBuilder):
         print(filepaths)
         # ocr_data = self.ocr_data
         items = []
-
+        logger.info(f"Training on {self.config.lang} with additional langs({self.config.additional_langs})")
+        logger.info(f"Evaluating on {self.config.lang}")
+        logger.info(f"Testing on {self.config.lang}")
                 
         for filepath in filepaths:
             logger.info("Generating examples from = %s", filepath)

@@ -1,4 +1,4 @@
-WANDB_PROJECT="xfund-re"
+WANDB_PROJECT="xfund-zh-re"
 WANDB_NAME="$4"
 CUDA_VISIBLE_DEVICES=$1,$2 python -m torch.distributed.launch --master_port $3 --nproc_per_node=2 examples_pub/run_xfun_joint.py \
         --model_name_or_path /home/zhanghang-s21/data/model/layoutxlm-base \

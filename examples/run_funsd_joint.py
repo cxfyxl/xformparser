@@ -4,21 +4,24 @@
 import logging
 import os
 import sys
-import json
+from dataclasses import dataclass, field
+from typing import Optional
+
 import numpy as np
-from datasets import ClassLabel, load_dataset
-# import wandb
-import layoutlmft.data.datasets.xfun
+from datasets import ClassLabel, load_dataset, load_metric
+
+import layoutlmft.data.datasets.funsd_new
 import transformers
-from layoutlmft import AutoModelForRelationExtraction
-from layoutlmft.data.data_args import XFUNDataTrainingArguments
-from layoutlmft.data.data_collator import DataCollatorForKeyValueExtraction
-from layoutlmft.evaluation import re_score
+from layoutlmft.data import DataCollatorForKeyValueExtraction
+from layoutlmft.data.data_args import DataTrainingArguments
 from layoutlmft.models.model_args import ModelArguments
 from layoutlmft.models.layoutlmv2 import LayoutLMv2ForJointCellClassification
-from layoutlmft.trainers import XfunJointTrainer,XfunJointTrainerXfund
+from layoutlmft.evaluation import re_score
+from layoutlmft.trainers import XfunJointTrainer
+from layoutlmft.trainers import FunsdTrainer as Trainer
 from transformers import (
     AutoConfig,
+    AutoModelForTokenClassification,
     AutoTokenizer,
     HfArgumentParser,
     PreTrainedTokenizerFast,
@@ -26,34 +29,28 @@ from transformers import (
     set_seed,
 )
 from transformers.trainer_utils import get_last_checkpoint, is_main_process
+from transformers.utils import check_min_version
 
-# set the wandb project where this run will be logged
-os.environ["WANDB_PROJECT"]="xfund-zh-re"
 
-# save your trained model checkpoint to wandb
-# os.environ["WANDB_LOG_MODEL"]="true"
-
-# turn off watch to log faster
-os.environ["WANDB_WATCH"]="false"
-
+# Will error if the minimal version of Transformers is not installed. Remove at your own risks.
+check_min_version("4.5.0")
 
 logger = logging.getLogger(__name__)
 
 
 def main():
-    # See all possible arguments in src/transformers/training_args.py
+    # See all possible arguments in layoutlmft/transformers/training_args.py
     # or by passing the --help flag to this script.
     # We now keep distinct sets of args, for a cleaner separation of concerns.
 
-    parser = HfArgumentParser((ModelArguments, XFUNDataTrainingArguments, TrainingArguments))
+    parser = HfArgumentParser((ModelArguments, DataTrainingArguments, TrainingArguments))
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
         # If we pass only one argument to the script and it's the path to a json file,
         # let's parse it to get our arguments.
         model_args, data_args, training_args = parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))
     else:
         model_args, data_args, training_args = parser.parse_args_into_dataclasses()
-    print("-"*10)
-    print(data_args)
+
     # Detecting last checkpoint.
     last_checkpoint = None
     if os.path.isdir(training_args.output_dir) and training_args.do_train and not training_args.overwrite_output_dir:
@@ -91,34 +88,27 @@ def main():
 
     # Set seed before initializing model.
     set_seed(training_args.seed)
-    # datasets = load_dataset(
-    #     os.path.abspath(layoutlmft.data.datasets.xfun.__file__),
-    #     f"xfun.{data_args.lang}",
-    #     additional_langs=data_args.additional_langs,
-    #     keep_in_memory=True,
-    # )
+
+
     datasets = load_dataset(
-        '/home/zhanghang-s21/data/layoutlmft/layoutlmft/data/datasets/xfun_new.py',
-        f"xfun_new.{data_args.lang}",
-        additional_langs=data_args.additional_langs,
+        os.path.abspath(layoutlmft.data.datasets.funsd_new.__file__),
+        "funsd_new",
+        # additional_langs=data_args.additional_langs,
         keep_in_memory=True,
     )
-    test_name = "validation"
+    # datasets = load_dataset()
+
     if training_args.do_train:
         column_names = datasets["train"].column_names
         features = datasets["train"].features
-    elif training_args.do_eval:
+    else:
         column_names = datasets["validation"].column_names
         features = datasets["validation"].features
-    else:
-        # column_names = datasets["test"].column_names
-        # features = datasets["test"].features
-        column_names = datasets[test_name].column_names
-        features = datasets[test_name].features
-    
-    text_column_name = "input_ids"
+    text_column_name = "tokens" if "tokens" in column_names else column_names[0]
+    label_column_name = (
+        f"{data_args.task_name}_tags" if f"{data_args.task_name}_tags" in column_names else column_names[1]
+    )
     label_column_name = "labels"
-
     remove_columns = column_names
 
     # In the event the labels are not a `Sequence[ClassLabel]`, we will need to go through the dataset to get the
@@ -168,19 +158,6 @@ def main():
         revision=model_args.model_revision,
         use_auth_token=True if model_args.use_auth_token else None,
     )
-    
-
-    # Tokenizer check: this script requires a fast tokenizer.
-    if not isinstance(tokenizer, PreTrainedTokenizerFast):
-        raise ValueError(
-            "This example script only works for models that have a fast tokenizer. Checkout the big table of models "
-            "at https://huggingface.co/transformers/index.html#bigtable to find the model types that meet this "
-            "requirement"
-        )
-
-    # Preprocessing the dataset
-    # Padding strategy
-    padding = "max_length" if data_args.pad_to_max_length else False
 
     if training_args.do_train:
         if "train" not in datasets:
@@ -196,30 +173,19 @@ def main():
         if data_args.max_val_samples is not None:
             eval_dataset = eval_dataset.select(range(data_args.max_val_samples))
 
-    if training_args.do_predict:
-        # if "test" not in datasets:
-        #     raise ValueError("--do_predict requires a test dataset")       
-        test_dataset = datasets[test_name]
-        if data_args.max_test_samples is not None:
-            print("begin predict")
-            test_dataset = test_dataset.select(range(data_args.max_test_samples))
-
-    # Data collator
+    padding = "max_length" if data_args.pad_to_max_length else False
     data_collator = DataCollatorForKeyValueExtraction(
         tokenizer,
         pad_to_multiple_of=8 if training_args.fp16 else None,
         padding=padding,
         max_length=512,
-    )
-
+    ) 
     def compute_metrics(p):
         pred_relations, gt_relations = p
         score = re_score(pred_relations, gt_relations, mode="boundaries")
         return score
 
-    # Initialize our Trainer
-    
-    trainer = XfunJointTrainerXfund(
+    trainer = XfunJointTrainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset if training_args.do_train else None,
@@ -229,10 +195,7 @@ def main():
         data_collator=data_collator,
         compute_metrics=compute_metrics,
     )
-    
-
-
-    # Training
+        # Training
     if training_args.do_train:
         checkpoint = last_checkpoint if last_checkpoint else None
         train_result = trainer.train(resume_from_checkpoint=checkpoint)
@@ -259,19 +222,9 @@ def main():
 
         trainer.log_metrics("eval", metrics)
         trainer.save_metrics("eval", metrics)
-    # Predict
-    if training_args.do_predict:
-        logger.info("*** Predict ***")       
-        predictions, labels, metrics = trainer.predict(test_dataset)
-        # # Save predictions
-        # print(metrics)
-        # trainer.log_metrics("test", metrics)
-        # trainer.save_metrics("test", metrics)
-        output_test_predictions_file = os.path.join(training_args.output_dir, test_name + "_data_test_predictions_re.json")
-        with open(output_test_predictions_file, 'w') as f:
-            json.dump({'pred':predictions, 'label': labels}, f)
-    # wandb.finish()
+    # Tokenizer check: this script requires a fast tokenizer.
 
+    
 
 def _mp_fn(index):
     # For xla_spawn (TPUs)

@@ -1,2 +1,2 @@
 from .funsd_trainer import FunsdTrainer
-from .xfun_trainer import XfunReTrainer, XfunSerTrainer, XfunCellSerTrainer, XfunJointTrainer
+from .xfun_trainer import XfunReTrainer, XfunSerTrainer, XfunCellSerTrainer, XfunJointTrainer,XfunJointTrainerXfund

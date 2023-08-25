@@ -307,7 +307,7 @@ def test1(ner_onnxmodel,ner_model,test_dataloader):
     pred_result = []
     for step, inputs in enumerate(test_dataloader):
         # pass
-        if step != 6:
+        if step != 10:
             continue
         del inputs['id']
         del inputs['len']
@@ -425,6 +425,8 @@ def test1(ner_onnxmodel,ner_model,test_dataloader):
 
 def test(ner_model,ner_onnxmodel,re_model,re_onnxmodel, test_dataloader, model_args, label_list, n_batch):
     for step, inputs in enumerate(test_dataloader):
+        if step != 10:
+            continue
         # pass
         del inputs['id']
         del inputs['len']
@@ -730,7 +732,7 @@ def main():
  
     
     # translate(ner_model,None, test_dataloader, model_args, label_list, 1)
-    import onnx
+    
     # import onnx.helper as helper
     # onnxmodel = onnx.load(os.path.join(model_args.model_name_or_path,"generic_ner_1.0.0.onnx"))
     

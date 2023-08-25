@@ -135,8 +135,8 @@ class REEmbeddings(nn.Module):
         super().__init__()
         self.use_special = use_special
         self.label_embedding = nn.Embedding(5, config.hidden_size, scale_grad_by_freq=True)
-        self.row_embeddding = nn.Embedding(50, config.hidden_size, scale_grad_by_freq=True)
-        self.column_embeddding = nn.Embedding(50, config.hidden_size, scale_grad_by_freq=True)
+        self.row_embeddding = nn.Embedding(50, config.hidden_size // 4, scale_grad_by_freq=True)
+        self.column_embeddding = nn.Embedding(50, config.hidden_size // 4, scale_grad_by_freq=True)
         # self.positionalembedding = PositionalEncoding(config.hidden_size // 2,60)
         self.softmax = torch.nn.Softmax(dim=-1)
         self.dim = config.hidden_size + config.hidden_size
@@ -173,11 +173,11 @@ class REEmbeddings(nn.Module):
             #     (row_embeddding, column_embeddding),
             #     dim=-1,
             # )
-            # final_embedings = torch.cat(
-            #     (label_embedding, row_embeddding, column_embeddding),
-            #     dim=-1,
-            # )
-            final_embedings = label_embedding + row_embeddding + column_embeddding
+            final_embedings = torch.cat(
+                (label_embedding, row_embeddding, column_embeddding),
+                dim=-1,
+            )
+            # final_embedings = label_embedding + row_embeddding + column_embeddding
         else:
             final_embedings = label_embedding
         # final_embedings = self.dropout(final_embedings)
@@ -511,14 +511,19 @@ class CellDecoder(nn.Module):
         # self.group_emb = nn.Embedding(50, self.group_dim, scale_grad_by_freq=True)
         # self.index_emb= nn.Embedding(50, self.group_dim, scale_grad_by_freq=True)
         self.use_specialid = False
-        self.re_embedding = REEmbeddings(config,self.use_specialid)
         self.use_group = False
         self.use_index = False
+        self.adaptive_loss = False
+        self.multi_task = False
+        self.use_del = False
+        self.use_angle = False
         self.head_nums = 8
+        self.config = config
         # self.entity_emb_rand = nn.Embedding(5, config.hidden_size, scale_grad_by_freq=True)
         self.mlp_dim = config.hidden_size * 2
         # self.transformer = nn.TransformerEncoderLayer(self.mlp_dim, 1, self.mlp_dim, config.hidden_dropout_prob)
         # self.transformer = nn.Transformer(d_model=self.mlp_dim,num_encoder_layers=1,num_decoder_layers=1,dropout=config.hidden_dropout_prob)
+        self.re_embedding = REEmbeddings(config,self.use_specialid)
         self.lstm_layer = nn.LSTM(self.mlp_dim, self.mlp_dim // 2, 1, batch_first=True, bidirectional=True)
         # self.transformer_layer = nn.TransformerEncoderLayer(d_model=self.mlp_dim,nhead=16,dropout=config.hidden_dropout_prob)
         # self.transformer_layer = nn.Transformer(d_model=self.mlp_dim,dropout=config.hidden_dropout_prob)
@@ -544,10 +549,7 @@ class CellDecoder(nn.Module):
             nn.ReLU(),
             nn.Dropout(config.hidden_dropout_prob),
         )
-        self.adaptive_loss = False
-        self.multi_task = False
-        self.use_del = True
-        self.use_angle = False
+
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
         self.ffnn_head = copy.deepcopy(projection)
         self.ffnn_tail = copy.deepcopy(projection)
@@ -719,6 +721,8 @@ class CellDecoder(nn.Module):
             if self.use_angle:
                 head_bbox_x,head_bbox_y = bbox[b][head_entities][:,0],bbox[b][head_entities][:,1]
                 tail_bbox_x,tail_bbox_y = bbox[b][tail_entities][:,0],bbox[b][tail_entities][:,1]
+                # x_embed = self.x_position_embeddings(self.config.max_2d_position_embeddings + (head_bbox_x - tail_bbox_x))
+                # y_embed = self.y_position_embeddings(self.config.max_2d_position_embeddings + (head_bbox_y - tail_bbox_y))
                 x_embed = self.x_position_embeddings(abs(head_bbox_x - tail_bbox_x))
                 y_embed = self.y_position_embeddings(abs(head_bbox_y - tail_bbox_y))
                 # entity_angle = self.get_angle(head_bbox_x,head_bbox_y,tail_bbox_x,tail_bbox_y)

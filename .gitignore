@@ -14,6 +14,7 @@ wandb
 mytmp_pub
 mytmp2
 xfund
+funsd
 *.pyc
 layoutlmft/__pycache__
 layoutlmft/data/__pycache__
@@ -21,9 +22,29 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.pyc
+*.cpython-37.pyc
 layoutlmft/models/layoutlmv2/__pycache__/modeling_layoutlmv2.cpython-37.pyc
 layoutlmft/data/__pycache__/utils.cpython-37.pyc
-
+layoutlmft/data/__pycache__/__init__.cpython-37.pyc
+layoutlmft/data/__pycache__/data_args.cpython-37.pyc
+layoutlmft/data/__pycache__/data_collator.cpython-37.pyc
+layoutlmft/data/datasets/__pycache__/__init__.cpython-37.pyc
+layoutlmft/data/datasets/__pycache__/xfun.cpython-37.pyc
+layoutlmft/models/__pycache__/__init__.cpython-37.pyc
+layoutlmft/models/__pycache__/model_args.cpython-37.pyc
+layoutlmft/models/layoutlmv2/__pycache__/configuration_layoutlmv2.cpython-37.pyc
+layoutlmft/models/layoutlmv2/__pycache__/detectron2_config.cpython-37.pyc
+layoutlmft/models/layoutlmv2/__pycache__/tokenization_layoutlmv2.cpython-37.pyc
+layoutlmft/models/layoutlmv2/__pycache__/tokenization_layoutlmv2_fast.cpython-37.pyc
+layoutlmft/models/layoutxlm/__pycache__/__init__.cpython-37.pyc
+layoutlmft/models/layoutxlm/__pycache__/configuration_layoutxlm.cpython-37.pyc
+layoutlmft/models/layoutxlm/__pycache__/modeling_layoutxlm.cpython-37.pyc
+layoutlmft/models/layoutxlm/__pycache__/tokenization_layoutxlm.cpython-37.pyc
+layoutlmft/models/layoutxlm/__pycache__/tokenization_layoutxlm_fast.cpython-37.pyc
+layoutlmft/modules/__pycache__/__init__.cpython-37.pyc
+layoutlmft/modules/decoders/__pycache__/__init__.cpython-37.pyc
+layoutlmft/trainers/__pycache__/__init__.cpython-37.pyc
+layoutlmft/trainers/__pycache__/funsd_trainer.cpython-37.pyc
 
 ### macOS ###
 # General

@@ -15,7 +15,7 @@ CUDA_VISIBLE_DEVICES=$1,$2 python -m torch.distributed.launch --master_port $3 -
         --per_device_train_batch_size 4 \
         --do_train \
         --do_eval \
-        --lang zh \
+        --lang $5 \
         --num_train_epochs 100 \
         --logging_steps 5 \
         --warmup_ratio 0.1 \

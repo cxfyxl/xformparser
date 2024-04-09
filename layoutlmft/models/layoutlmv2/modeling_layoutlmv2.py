@@ -1617,7 +1617,7 @@ class LayoutLMv2ForJointCellClassification(LayoutLMv2PreTrainedModel):
         pred_entities = copy.deepcopy(entities)
         # std_1, std_2= torch.exp(self.log_var_a)**0.5, torch.exp(self.log_var_b)**0.5
         # token_logits = self.classifier(sequence_output)
-        
+
         # if labels is not None:
         #     # loss_fct = CrossEntropyLoss()
 
@@ -1680,8 +1680,12 @@ class LayoutLMv2ForJointCellClassification(LayoutLMv2PreTrainedModel):
                 ner_loss += self.loss_fct(logits, entities_labels)
             all_logits.append(logits)
         # sequence_output re_hidden_states
-        # sequence_output
-        re_loss, pred_relations = self.extractor(re_hidden_states, bbox, copy.deepcopy(pred_entities), entities, relations, epoch, all_logits)
+        # sequence_output\
+        if self.multi_task:
+            print("user multi")
+            re_loss, pred_relations = self.extractor(re_hidden_states, bbox, entities, entities, relations, epoch, all_logits)
+        else:
+            re_loss, pred_relations = self.extractor(re_hidden_states, bbox, copy.deepcopy(pred_entities), entities, relations, epoch, all_logits)
         gamma = 0.33
         loss = ner_loss + re_loss
         # loss = re_loss

@@ -227,7 +227,7 @@ class REDecoder(nn.Module):
         self.angle_dim = config.hidden_size // 2
         self.group_dim = config.hidden_size // 4
         self.use_angle = False
-        self.use_specialid = True
+        self.use_specialid = False
         self.del_begin = 0
         self.del_end = 50
         self.mlp_dim = config.hidden_size * 2   # + config.hidden_size
@@ -514,7 +514,7 @@ class CellDecoder(nn.Module):
         self.use_group = False
         self.use_index = False
         self.adaptive_loss = False
-        self.multi_task = False
+        self.multi_task = True
         self.use_del = False
         self.use_angle = False
         self.head_nums = 8
